@@ -39,6 +39,8 @@ def checksum(msg):
     ret[0] = _checksum(ret[1:], 0x2D)
   elif addr == 0x13B: # WHEEL_SPEEDS
     ret[0] = _checksum(ret[1:8], 0x7F)
+  elif addr == 0x147: # RX_STEER_RELATED, block B
+    ret[8] = _checksum(ret[9:16], 0x61)
 
   return addr, ret, bus
 
@@ -63,6 +65,8 @@ class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest, 
 
   MAX_BRAKE = 107
   MAX_POSSIBLE_BRAKE = 180
+
+  cnt_torque_meas = 0
 
   def setUp(self):
     self.packer = CANPackerSafety(opendbc)
@@ -97,8 +101,9 @@ class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest, 
     min_torque, max_torque = get_signal_range(torque_signal)
     torque = max(min(torque, max_torque), min_torque)
 
-    values = {"B_RX_EPS_TORQUE": torque}
-    return self.packer.make_can_msg_safety("RX_STEER_RELATED", 0, values)
+    values = {"B_RX_EPS_TORQUE": torque, "B_COUNTER": self.cnt_torque_meas % 16}
+    self.__class__.cnt_torque_meas += 1
+    return self.packer.make_can_msg_safety("RX_STEER_RELATED", 0, values, fix_checksum=checksum)
 
   def _torque_cmd_msg(self, torque, steer_req=1):
     # 10-bit signed signal clip to not produce errors on test
@@ -130,6 +135,13 @@ class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest, 
     # invalidate checksum
     msg = self._pcm_status_msg(0)
     msg[0].data[0] = 0xFF
+    self.assertFalse(self._rx(msg))
+
+    # eps torque feedback (block B checksum)
+    self.assertTrue(self._rx(self._torque_meas_msg(0)))
+    # invalidate checksum
+    msg = self._torque_meas_msg(0)
+    msg[0].data[8] ^= 0xFF
     self.assertFalse(self._rx(msg))
 
 
