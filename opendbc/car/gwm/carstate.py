@@ -94,8 +94,6 @@ class CarState(CarStateBase):
 
   @staticmethod
   def get_can_parsers(CP):
-    # Compute bus offset from number of safetyConfigs so multipanda setups
-    # (internal + external pandas) map DBCs to the correct physical bus.
     can_base = CanBusBase(CP, None)
     main_bus = can_base.offset
     adas_bus = can_base.offset + 1
