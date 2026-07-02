@@ -21,11 +21,13 @@ class CarState(CarStateBase):
     self.is_activation_lever_pulled = False
     self.prev_activation_lever_pulled = False
     self.main_on = False
-    self.steer_fault_temporary_counter = 0
+    self.eps_fault_counter = 0
+    self.steer_cmd_ignored_counter = 0
 
   def update(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.main]
     cp_cam = can_parsers[Bus.cam]
+    cp_loopback = can_parsers[Bus.loopback]
     ret = structs.CarState()
 
     self.steer_and_ap_stalk_msg = copy.copy(cp.vl["STEER_AND_AP_STALK"])
@@ -60,11 +62,15 @@ class CarState(CarStateBase):
     ret.steeringAngleDeg = cp.vl["STEER_AND_AP_STALK"]["STEERING_ANGLE"] * (-1 if cp.vl["STEER_AND_AP_STALK"]["STEERING_DIRECTION"] else 1)
     ret.steeringRateDeg = cp.vl["STEER_AND_AP_STALK"]["STEERING_RATE"] * (-1 if (cp.vl["STEER_AND_AP_STALK"]["RATE_DIRECTION"] > 0) else 1)
 
-    # Since loopback was throwing a CanError even though the logic expected cp_loopback.vl_vall > 0, I moved the detection to interface.py against lat_active.
-    ret.steerFaultTemporary = False # (bool(cp_loopback.vl["STEER_CMD"]["STEER_REQUEST"]) and bool(cp.vl["RX_STEER_RELATED"]["A_RX_STEER_REQUESTED"] != 1))
-    self.steer_fault_temporary_counter = (self.steer_fault_temporary_counter + 1) if (cp.vl["RX_STEER_RELATED"]["EPS_FAULT_PERMANENT"] == 1) else 0
-    ret.steerFaultTemporary |= self.steer_fault_temporary_counter > 100
-    ret.steerFaultPermanent = False #self.steer_fault_permanent_counter > 500
+    # Fault when the EPS ignores our steer command, which is echoed back on the loopback
+    # bus (GM pattern). STEER_CMD is sent at 50Hz, so only count on frames where an echo
+    # arrived; both thresholds are ~1s.
+    if len(cp_loopback.vl_all["STEER_CMD"]["STEER_REQUEST"]) > 0:
+      steer_ignored = bool(cp_loopback.vl["STEER_CMD"]["STEER_REQUEST"]) and cp.vl["RX_STEER_RELATED"]["A_RX_STEER_REQUESTED"] != 1
+      self.steer_cmd_ignored_counter = (self.steer_cmd_ignored_counter + 1) if steer_ignored else 0
+    self.eps_fault_counter = (self.eps_fault_counter + 1) if (cp.vl["RX_STEER_RELATED"]["EPS_FAULT_PERMANENT"] == 1) else 0
+    ret.steerFaultTemporary = self.steer_cmd_ignored_counter > 50 or self.eps_fault_counter > 100
+    ret.steerFaultPermanent = False
 
     ret.steeringTorque = cp.vl["RX_STEER_RELATED"]["B_RX_DRIVER_TORQUE"]
     ret.steeringTorqueEps = cp.vl["RX_STEER_RELATED"]["B_RX_EPS_TORQUE"]
@@ -103,4 +109,7 @@ class CarState(CarStateBase):
       Bus.main: CANParser(DBC[CP.carFingerprint][Bus.pt], [], main_bus),
       Bus.adas: CANParser(DBC[CP.carFingerprint][Bus.pt], [], adas_bus),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], cam_bus),
+      # our own transmitted STEER_CMD, echoed back by the panda; NaN frequency exempts it
+      # from alive checks since nothing is echoed until openpilot starts sending
+      Bus.loopback: CANParser(DBC[CP.carFingerprint][Bus.pt], [("STEER_CMD", float('nan'))], can_base.offset + 128),
     }
