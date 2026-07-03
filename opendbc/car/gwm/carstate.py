@@ -18,9 +18,6 @@ class CarState(CarStateBase):
     self.longitudinal_stock_values = {}
     self.hud_stock_values = {}
 
-    self.is_activation_lever_pulled = False
-    self.prev_activation_lever_pulled = False
-    self.main_on = False
     self.eps_fault_counter = 0
     self.steer_cmd_ignored_counter = 0
 
@@ -43,7 +40,12 @@ class CarState(CarStateBase):
       cp.vl["WHEEL_SPEEDS"]["REAR_RIGHT_WHEEL_SPEED"]
     )
 
-    ret.accFaulted = bool(cp_cam.vl["ACC"]["CRUISE_STATE_2"] == 0)
+    # CRUISE_STATE_2: 0-2 = deactivated, >2 = active (validated on an H6 PHEV,
+    # otaviobonder's haval-new-pcm-signal branch); 0 also observed as fault/off
+    cruise_state = cp_cam.vl["ACC"]["CRUISE_STATE_2"]
+    ret.accFaulted = bool(cruise_state == 0)
+    ret.cruiseState.available = bool(cruise_state > 0)
+    ret.cruiseState.enabled = bool(cruise_state > 2)
     ret.cruiseState.speed = cp_cam.vl["ACC"]["ACC_SPEED_SELECTION"]  * CV.KPH_TO_MS
     if not self.CP.openpilotLongitudinalControl:
       ret.cruiseState.speed = -1
@@ -85,16 +87,6 @@ class CarState(CarStateBase):
                                                                       cp.vl["LIGHTS"]["RIGHT_TURN_SIGNAL"])
     ret.leftBlindspot = bool(cp.vl["RADAR_BEHIND"]["BSM_LEFT"] > 0)
     ret.rightBlindspot = bool(cp.vl["RADAR_BEHIND"]["BSM_RIGHT"] > 0)
-
-    if cp.vl["STEER_AND_AP_STALK"]["AP_CANCEL_COMMAND"] or ret.brakePressed:
-      self.main_on = False
-    self.is_activation_lever_pulled = bool(cp.vl["STEER_AND_AP_STALK"]["AP_ENABLE_COMMAND"])
-    if not self.is_activation_lever_pulled and self.prev_activation_lever_pulled and not self.main_on:
-      self.main_on = True
-    self.prev_activation_lever_pulled = self.is_activation_lever_pulled
-
-    ret.cruiseState.available = self.main_on
-    ret.cruiseState.enabled = self.main_on
 
     return ret
 

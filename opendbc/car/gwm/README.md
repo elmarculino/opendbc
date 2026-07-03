@@ -90,6 +90,17 @@ A fault is raised after ~1s of ignored commands (50 echoed frames), or ~1s of
 reflects the driver-torque cutout in carcontroller, so driver overrides do not
 count toward a fault.
 
+## Cruise state
+
+Engagement is read from the PCM: `CRUISE_STATE_2` (3 bits) in the camera's
+`ACC` message (0x2AB) — **0–2 = deactivated, >2 = active** (0 also observed as
+fault/off). Semantics were validated on-car on an H6 PHEV
+(otaviobonder's `haval-new-pcm-signal` branch, Feb 2026); GWM appears to share
+this system across the mk3 platform. Both carstate and the safety
+`pcm_cruise_check` use this signal, replacing an earlier hand-rolled stalk-lever
+state machine that could desync from the car's real ACC state. Not yet
+re-validated on the non-PHEV H6 — check on the first drive.
+
 ## Personality / follow-distance sync (`interface.py`)
 
 The stock ACC cycles through **4** follow distances; openpilot has **3**

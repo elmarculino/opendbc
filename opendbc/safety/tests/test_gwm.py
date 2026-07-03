@@ -87,13 +87,9 @@ class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest, 
     return self.packer.make_can_msg_safety("WHEEL_SPEEDS", 0, values, fix_checksum=checksum)
 
   def _pcm_status_msg(self, enable):
-    values = {"AP_ENABLE_COMMAND": enable, "AP_CANCEL_COMMAND": not enable}
-    return self.packer.make_can_msg_safety("STEER_AND_AP_STALK", 0, values, fix_checksum=checksum)
-
-  def test_main_cancel_button(self):
-    self.safety.set_controls_allowed(True)
-    self._rx(self.packer.make_can_msg_safety("STEER_AND_AP_STALK", 0, {"AP_CANCEL_COMMAND": 1}, fix_checksum=checksum))
-    self.assertFalse(self.safety.get_controls_allowed())
+    # CRUISE_STATE_2: 0-2 = deactivated, >2 = active
+    values = {"CRUISE_STATE_2": 5 if enable else 0}
+    return self.packer.make_can_msg_safety("ACC", 2, values)
 
   def _torque_meas_msg(self, torque):
     # 11-bit signed signal clip to not produce errors on test
@@ -127,13 +123,6 @@ class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest, 
     self.assertTrue(self._rx(self._speed_msg(0)))
     # invalidate checksum
     msg = self._speed_msg(0)
-    msg[0].data[0] = 0xFF
-    self.assertFalse(self._rx(msg))
-
-    # cruise
-    self.assertTrue(self._rx(self._pcm_status_msg(0)))
-    # invalidate checksum
-    msg = self._pcm_status_msg(0)
     msg[0].data[0] = 0xFF
     self.assertFalse(self._rx(msg))
 
