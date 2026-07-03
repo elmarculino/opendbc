@@ -41,6 +41,10 @@ def checksum(msg):
     ret[0] = _checksum(ret[1:8], 0x7F)
   elif addr == 0x147: # RX_STEER_RELATED, block B
     ret[8] = _checksum(ret[9:16], 0x61)
+  elif addr == 0x120: # BRAKE2, block A
+    ret[0] = _checksum(ret[1:8], 0xEE)
+  elif addr == 0x60: # CAR_OVERALL_SIGNALS2 (gas), block B
+    ret[8] = _checksum(ret[9:16], 0x95)
 
   return addr, ret, bus
 
@@ -76,11 +80,11 @@ class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest, 
 
   def _user_gas_msg(self, gas):
     values = {"GAS_POSITION": gas}
-    return self.packer.make_can_msg_safety("CAR_OVERALL_SIGNALS2", 0, values)
+    return self.packer.make_can_msg_safety("CAR_OVERALL_SIGNALS2", 0, values, fix_checksum=checksum)
 
   def _user_brake_msg(self, brake):
     values = {"PEDAL_BRAKE_PRESSED": brake}
-    return self.packer.make_can_msg_safety("BRAKE2", 0, values)
+    return self.packer.make_can_msg_safety("BRAKE2", 0, values, fix_checksum=checksum)
 
   def _speed_msg(self, speed):
     values = {f"{pos}_WHEEL_SPEED": speed * 1.0 for pos in ["FRONT_LEFT", "FRONT_RIGHT", "REAR_LEFT", "REAR_RIGHT"]}
@@ -130,6 +134,18 @@ class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest, 
     self.assertTrue(self._rx(self._torque_meas_msg(0)))
     # invalidate checksum
     msg = self._torque_meas_msg(0)
+    msg[0].data[8] ^= 0xFF
+    self.assertFalse(self._rx(msg))
+
+    # brake (block A checksum)
+    self.assertTrue(self._rx(self._user_brake_msg(0)))
+    msg = self._user_brake_msg(0)
+    msg[0].data[0] ^= 0xFF
+    self.assertFalse(self._rx(msg))
+
+    # gas (block B checksum)
+    self.assertTrue(self._rx(self._user_gas_msg(0)))
+    msg = self._user_gas_msg(0)
     msg[0].data[8] ^= 0xFF
     self.assertFalse(self._rx(msg))
 

@@ -37,10 +37,16 @@ because `gwmcan.py` forges them and the ECUs accept the messages:
 | `STEER_AND_AP_STALK` | `0x2D` |
 | `WHEEL_SPEEDS` block A | `0x7F` |
 | `RX_STEER_RELATED` blocks A & B | `0x61` |
+| `BRAKE2` block A | `0xEE` |
+| `CAR_OVERALL_SIGNALS2` (gas) blocks A/B/C | `0xF3` / `0x95` / `0xAE` |
 | `STEER_CMD` block 2 | `0x9B` |
 | `STEER_CMD` block 3 | `0x34` (from the author's `haval_fwd-hook` branch; not yet used here) |
 | `ACC_CMD` brake / acc blocks | `0xEF` / `0x87` |
 | `LATERAL_STATE` | `0x66` |
+
+The `BRAKE2` and gas constants were derived from a public drive log
+(route `075b133b6181e058/00000163`, ~9k/12k frames, 100% consistent, confirmed
+on a second segment).
 
 `STEER_CMD` additionally carries a 5-bit arithmetic checksum
 (`gwm_basic_chksum_for_0x12B`).
@@ -55,14 +61,16 @@ Checksum + counter validated on RX:
   torque used by the torque safety checks lives. CRC at byte 8 covers bytes
   9–15, counter in the low nibble of byte 15.
 
-**TODO:** `BRAKE2` (0x120) and `CAR_OVERALL_SIGNALS2` (0x60) have the same
-per-block CRC layout but unknown xor constants. They can be derived from a
-single logged frame: `xor_out = crc8_0x1D(bytes 1–7) ^ byte 0`. Until then
-their rx checks run with `ignore_checksum`/`ignore_counter`.
+Checksum validated, counter ignored on RX:
+
+- `BRAKE2` (0x120) — **block A**, CRC byte 0 over bytes 1–7 (brake-pressed bit).
+- `CAR_OVERALL_SIGNALS2` (0x60) — **block B**, CRC byte 8 over bytes 9–15
+  (`GAS_POSITION`). Counters on both are ignored: in logs they show a
+  systematic ~1-in-15 irregularity that would trip false counter faults on
+  these safety-critical messages.
 
 The 0x147 counter check assumes the EPS increments block-B counters
-monotonically at 50Hz — confirm against a drive log / road test before
-relying on it.
+monotonically at 50Hz — confirm against a road test before relying on it.
 
 ## EPS fault detection (loopback bus)
 

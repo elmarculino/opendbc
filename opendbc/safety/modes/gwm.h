@@ -33,9 +33,10 @@ static uint8_t gwm_get_counter(const CANPacket_t *msg) {
 
 static uint32_t gwm_get_checksum(const CANPacket_t *msg) {
   uint8_t chksum = 0;
-  if ((msg->addr == GWM_SPEED) || (msg->addr == GWM_ADAS_ACTIVATION)) {
+  if ((msg->addr == GWM_SPEED) || (msg->addr == GWM_ADAS_ACTIVATION) || (msg->addr == GWM_BRAKE)) {
     chksum = msg->data[0] & 0xFFU;
-  } else if (msg->addr == GWM_RX_STEER_RELATED) {
+  } else if ((msg->addr == GWM_RX_STEER_RELATED) || (msg->addr == GWM_GAS)) {
+    // block B: CRC at byte 8 covers the safety-relevant signals in bytes 9-15
     chksum = msg->data[8] & 0xFFU;
   } else {
   }
@@ -48,13 +49,21 @@ static uint32_t gwm_compute_checksum(const CANPacket_t *msg) {
   uint8_t xor_out = 0x00;
   int start = 1;
 
+  // xor_out constants derived from logged frames (route 075b133b6181e058/00000163)
   if (msg->addr == GWM_ADAS_ACTIVATION) {
     xor_out = 0x2DU;
   } else if (msg->addr == GWM_SPEED) {
     xor_out = 0x7FU;
+  } else if (msg->addr == GWM_BRAKE) {
+    // block A: CRC at byte 0 covers bytes 1-7 (BRAKE pressed bit)
+    xor_out = 0xEEU;
   } else if (msg->addr == GWM_RX_STEER_RELATED) {
     // block B: CRC at byte 8 covers bytes 9-15
     xor_out = 0x61U;
+    start = 9;
+  } else if (msg->addr == GWM_GAS) {
+    // block B: CRC at byte 8 covers bytes 9-15 (GAS_POSITION)
+    xor_out = 0x95U;
     start = 9;
   } else {
   }
@@ -181,11 +190,10 @@ static safety_config gwm_init(uint16_t param) {
   static RxCheck gwm_rx_checks[] = {
     {.msg = {{GWM_ADAS_ACTIVATION, GWM_MAIN_BUS, 8, 100U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, // cruise state, steering angle, steer rate
     {.msg = {{GWM_SPEED, GWM_MAIN_BUS, 64, 50U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, // speed
-    // TODO: GAS and BRAKE carry per-block CRCs (same CRC8 poly 0x1D), but their xor_out
-    // constants are still unknown. Derive them from a drive log (xor_out = crc(bytes 1-7) ^ byte 0)
-    // and enable checksum/counter validation here.
-    {.msg = {{GWM_GAS, GWM_MAIN_BUS, 64, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // gas pedal
-    {.msg = {{GWM_BRAKE, GWM_MAIN_BUS, 64, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}}, // brake2
+    // GAS/BRAKE checksums validated (xor derived from logs); counters left ignored, they
+    // show a systematic ~1/15 irregularity in logs that would cause false counter faults.
+    {.msg = {{GWM_GAS, GWM_MAIN_BUS, 64, 50U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // gas pedal
+    {.msg = {{GWM_BRAKE, GWM_MAIN_BUS, 64, 50U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}}, // brake2
     {.msg = {{GWM_RX_STEER_RELATED, GWM_MAIN_BUS, 64, 50U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, // eps feedback to camera
     {.msg = {{GWM_STEER_CMD, GWM_CAMERA_BUS, 64, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}}, // copy stock steering cmd
     {.msg = {{GWM_CRUISE, GWM_CAMERA_BUS, 64, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}}, // CRUISE_STATE, ACC
