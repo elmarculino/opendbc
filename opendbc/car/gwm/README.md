@@ -126,3 +126,12 @@ diverge.
 Only the engine ECU responds to UDS queries, and only on the OBD port
 (`GREATWALLMOTORS_RX_OFFSET = 0x6a`). No other ECUs have been reachable —
 fingerprinting relies on that single firmware plus CAN fingerprints.
+
+## History
+
+An earlier port attempt (openpilot#32880 + opendbc#1086, 2024, with
+@celobusana's H6 PHEV) was closed when car code moved to the opendbc repo.
+The CRC8 algorithm (poly `0x1D`, xor `0x2D` for the stalk message) was first
+cracked in openpilot#32877, which includes 300+ logged sample vectors for
+`STEER_AND_AP_STALK`. Notes from that effort: the H6 PHEV is a distinct
+variant, and the Haval H6 "GT" needs a different harness from the regular H6.
