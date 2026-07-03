@@ -38,6 +38,7 @@ because `gwmcan.py` forges them and the ECUs accept the messages:
 | `WHEEL_SPEEDS` block A | `0x7F` |
 | `RX_STEER_RELATED` blocks A & B | `0x61` |
 | `STEER_CMD` block 2 | `0x9B` |
+| `STEER_CMD` block 3 | `0x34` (from the author's `haval_fwd-hook` branch; not yet used here) |
 | `ACC_CMD` brake / acc blocks | `0xEF` / `0x87` |
 | `LATERAL_STATE` | `0x66` |
 
@@ -103,12 +104,15 @@ frames so the `leadDistanceBars` feedback can round-trip before the next pulse.
 (state side, in `update()`). The controller cannot emit button events and
 carstate cannot see `CC`, so the interface is the only meeting point.
 
-**Cleaner alternative (open design question):** emit `gapAdjustCruise` from
-the physical stalk buttons (`AP_REDUCE_DISTANCE_COMMAND` /
-`AP_INCREASE_DISTANCE_COMMAND` edges) in carstate, like Toyota/Hyundai. That
-removes both interface overrides entirely, but drops the sync-to-stock-display
-semantics: openpilot's 3-state personality and the car's 4-state display could
-diverge.
+**Design history:** the author's `haval_match-distance-lines` branch shows the
+stalk-button-edge approach (emit `gapAdjustCruise` from
+`AP_REDUCE_DISTANCE_COMMAND`/`AP_INCREASE_DISTANCE_COMMAND` in carstate, like
+Toyota/Hyundai) was implemented first and deliberately replaced with the
+display-sync approach. The stalk buttons are consumed by the stock ACC (they
+change the car's own distance setting, which openpilot forwards to the
+camera), so reacting to the button *and* to the resulting display change would
+double-apply. Syncing to `CAR_DISTANCE_SELECTION` keeps a single source of
+truth.
 
 ## Carcontroller quirks
 
@@ -126,6 +130,16 @@ diverge.
 Only the engine ECU responds to UDS queries, and only on the OBD port
 (`GREATWALLMOTORS_RX_OFFSET = 0x6a`). No other ECUs have been reachable —
 fingerprinting relies on that single firmware plus CAN fingerprints.
+
+## Stock LKAS coexistence (experimental, not in this PR)
+
+Stock LKAS shares the `STEER_CMD` (0x12B) message. The author's
+`haval_fwd-hook` branch prototypes dynamic forwarding: the safety rx hook
+detects stock LKAS engagement (rising edge of the camera's `STEER_REQUEST`
+while controls are not allowed), a fwd hook then forwards the stock camera
+`STEER_CMD` instead of blocking it, and the tx hook rejects openpilot steering
+while stock LKAS is active. That branch also bumps the counter by +2 to avoid
+a gap during the handover. Relevant when reviewing relay/forwarding behavior.
 
 ## History
 
