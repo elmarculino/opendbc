@@ -1017,6 +1017,8 @@ class SafetyTest(SafetyTestBase):
               continue
             if attr.startswith('TestFord') and current_test.startswith('TestFord'):
               continue
+            if attr.startswith('TestGwm') and current_test.startswith('TestGwm'):
+              continue
             if attr.startswith('TestHyundaiCanfd') and current_test.startswith('TestHyundaiCanfd'):
               continue
             if {attr, current_test}.issubset({'TestHyundaiLongitudinalSafety', 'TestHyundaiLongitudinalSafetyCameraSCC', 'TestHyundaiSafetyFCEVLong'}):
@@ -1044,6 +1046,11 @@ class SafetyTest(SafetyTestBase):
             # Volkswagen MQB and Honda Bosch Radarless ACC HUD messages overlap
             if attr == 'TestVolkswagenMqbLongSafety' and current_test.startswith('TestHondaBoschRadarless'):
               tx = list(filter(lambda m: m[0] not in [0x30c, ], tx))
+
+            # Volkswagen (MQB/MEB) and GWM STEER_CMD messages overlap on 0x12b. Match the whole
+            # TestGwm* family — the MK4 angle-control TX case is TestGwmMk4TxSafety, not TestGwmSafety.
+            if attr.startswith('TestGwm') and current_test.startswith('TestVolkswagen'):
+              tx = list(filter(lambda m: m[0] not in [0x12b, ], tx))
 
             # TODO: Temporary, should be fixed in panda firmware, safety_honda.h
             if attr.startswith('TestHonda'):
