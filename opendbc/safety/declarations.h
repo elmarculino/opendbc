@@ -352,6 +352,7 @@ extern const safety_hooks nooutput_hooks;
 extern const safety_hooks alloutput_hooks;
 extern const safety_hooks ford_hooks;
 extern const safety_hooks gm_hooks;
+extern const safety_hooks gwm_hooks;
 extern const safety_hooks honda_nidec_hooks;
 extern const safety_hooks honda_bosch_hooks;
 extern const safety_hooks hyundai_canfd_hooks;
