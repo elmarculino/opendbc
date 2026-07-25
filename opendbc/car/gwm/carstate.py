@@ -40,7 +40,9 @@ class CarState(CarStateBase):
     # MK4 own-cruise (pcmCruise=False) button/engage state (see update()).
     self.prev_enable_gesture = False
     self.engage_latch = False
+    self.gesture_fired = False
     self.prev_engage = 0
+    self.prev_lkas = 0
     self.prev_speed_up = 0
     self.prev_speed_down = 0
     # synthetic long-press latch so a momentary scroll click steps +/-5 km/h (see MK4_SCROLL_HOLD)
@@ -162,25 +164,40 @@ class CarState(CarStateBase):
     ret.rightBlindspot = bool(cp.vl["RADAR_BEHIND"]["BSM_RIGHT"] > 0)
 
     cancel = bool(cp.vl["STEER_AND_AP_STALK"]["AP_CANCEL_COMMAND"])
-    if cancel or ret.brakePressed:
+    # MK4: main_on is the ACC MAIN switch, not the engage latch — brake must not clear it, or MADS loses
+    # lateral every time the driver touches the pedal. Longitudinal still drops on brake (pcmCruise=False,
+    # selfdrived disengages) and lateral follows the MadsSteeringMode param. MK3 keeps the old semantics
+    # because there main_on IS cruiseState.enabled.
+    if cancel or (ret.brakePressed and self.CP.carFingerprint != CAR.GWM_HAVAL_H6_MK4):
       self.main_on = False
 
     if self.CP.carFingerprint == CAR.GWM_HAVAL_H6_MK4:
       # MK4 runs its OWN cruise loop (pcmCruise=False): engagement + set-speed + personality come from
       # the wheel/stalk buttons, NOT the OEM ACC (which freezes its set speed once openpilot owns the car).
-      # Engagement is the gentle-or-further DOWN stalk gesture (msg 0xC7 GEAR_STALK bit STALK_DOWN) so a
-      # gentle DOWN also engages, not just the hard FURTHER_DOWN detent. The panda arms its controls latch
-      # on the same bit (gwm.h, gated on GwmSafetyFlags.OP_CRUISE); cruiseState.available mirrors our latch
-      # so the two safety gates never desync.
+      # The stalk's two DOWN gestures (msg 0xC7 GEAR_STALK) map onto the car's two OEM modes:
+      #   gentle DOWN  (STALK_DOWN=1, STALK_FURTHER=0) -> ButtonType.lkas, i.e. MADS lateral only (toggles)
+      #   FURTHER_DOWN (STALK_DOWN=1, STALK_FURTHER=1) -> full engage, lateral + our own ACC loop
+      # Both raise main_on, so cruiseState.available gates the lkas button in sunnypilot/mads/mads.py.
+      # The panda arms its controls latch on the same bits (gwm.h, gated on GwmSafetyFlags.OP_CRUISE);
+      # cruiseState.available mirrors our latch so the two safety gates never desync.
       enable_gesture = bool(cp.vl["GEAR_STALK"]["STALK_DOWN"])
+      further = bool(cp.vl["GEAR_STALK"]["STALK_FURTHER"])
       # DOWN is the same physical motion as shifting N→D / R→D, so gate engagement to when the gear
       # is already D (this frame and last) and the car is moving — a gear shift must not auto-engage. Latch
       # the decision at the gesture's rising edge so it holds for the whole press.
       gear_d = drive_mode == 1 and self.prev_drive_mode == 1
       if enable_gesture and not self.prev_enable_gesture:
         self.engage_latch = gear_d and abs(ret.vEgoRaw) > 0.5
-      engage = int(enable_gesture and self.engage_latch)
+        self.gesture_fired = False
+      # Full engage fires as soon as the hard detent shows up; the lateral-only pulse fires on RELEASE of a
+      # gesture that never reached the detent, so a hard pull that sweeps 0x4b -> 0x5a does not toggle MADS
+      # on its way to the detent.
+      engage = int(enable_gesture and further and self.engage_latch)
       if engage and not self.prev_engage:
+        self.main_on = True
+        self.gesture_fired = True
+      lkas = int(self.prev_enable_gesture and not enable_gesture and self.engage_latch and not self.gesture_fired)
+      if lkas:
         self.main_on = True
 
       # Wheel scroll = set-speed +/-. Each momentary click is stretched into a synthetic long-press so
@@ -203,6 +220,7 @@ class CarState(CarStateBase):
       dist_down = int(cp.vl["STEER_AND_AP_STALK"]["AP_REDUCE_DISTANCE_COMMAND"])
       ret.buttonEvents = [
         *create_button_events(engage, self.prev_engage, {1: ButtonType.decelCruise}),
+        *create_button_events(lkas, self.prev_lkas, {1: ButtonType.lkas}),
         *create_button_events(speed_up, self.prev_speed_up, {1: ButtonType.accelCruise}),
         *create_button_events(speed_down, self.prev_speed_down, {1: ButtonType.decelCruise}),
         *create_button_events(dist_up, self.prev_dist_up, {1: ButtonType.gapAdjustCruise}),
@@ -211,6 +229,7 @@ class CarState(CarStateBase):
       ]
       self.prev_enable_gesture = enable_gesture
       self.prev_engage = engage
+      self.prev_lkas = lkas
       self.prev_speed_up, self.prev_speed_down = speed_up, speed_down
       self.prev_dist_up, self.prev_dist_down = dist_up, dist_down
       self.prev_cancel = int(cancel)

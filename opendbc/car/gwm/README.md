@@ -20,7 +20,7 @@ Community port work for **GWM (Great Wall)** vehicles, with focus on the **2026 
 | Fingerprint / car ID | **Working** | Force fingerprint + CAN fingerprints; FW optional |
 | Lateral (angle) | **Working** | `SteerControlType.angle`, panda `ANGLE_CONTROL` |
 | Longitudinal (alpha) | **Working** | `openpilotLongitudinalControl`, `pcmCruise=False` (OP_CRUISE) |
-| Engage | **Working** | Gear stalk **DOWN** (gentle), gated on gear D + motion |
+| Engage | **Working** | Gear stalk **DOWN**, gated on gear D + motion — gentle = lateral only, detent = full |
 | Set-speed (OP) | **Working** | Wheel scroll ±5 km/h (synthetic long-press) |
 | Set-speed on OEM cluster | **In progress** | Re-TX ACC `0x2AB` with latched set + `CRUISE_STATE` activated |
 | Regen on brake (PHEV) | **Working** | Light hysteresis on regen enable bits only |
@@ -33,7 +33,8 @@ Community port work for **GWM (Great Wall)** vehicles, with focus on the **2026 
 ## Architecture (MK4)
 
 ```
-Engage:     GEAR_STALK STALK_DOWN → main_on / cruise available + panda OP_CRUISE arm
+Engage:     GEAR_STALK gentle DOWN  → main_on + ButtonType.lkas → MADS lateral only (toggles)
+            GEAR_STALK FURTHER_DOWN → main_on + decelCruise     → lateral + our ACC loop
 Lateral:    STEER_CMD angle (14-bit) @ main; EPS keepalive 0x147 @ camera
 Long:       ACC_CMD (0x143) gas/brake + BRAKE_GAS_STATE for PHEV regen
 Cluster:    re-TX ACC (0x2AB) @ main with ACC_SPEED_SELECTION + CRUISE activated
@@ -43,7 +44,7 @@ Distance:   wheel follow buttons → gapAdjustCruise → openpilot personality (
 
 | Flag | Meaning |
 |------|---------|
-| `GwmSafetyFlags.OP_CRUISE` | Arm on gear stalk down, not MK3 FURTHER_DOWN-only path |
+| `GwmSafetyFlags.OP_CRUISE` | Arm off gear stalk (`acc_main_on` on any DOWN, `pcm_cruise_check` on the detent), not the MK3 msg 161 path |
 | `GwmSafetyFlags.ANGLE_CONTROL` | Angle command checks (VM) |
 | `GwmSafetyFlags.LONG_CONTROL` | Longitudinal TX allowed |
 
@@ -133,7 +134,9 @@ Distance:   wheel follow buttons → gapAdjustCruise → openpilot personality (
 ### Product / UX
 1. Experimental Mode for **traffic lights / stop signs** (e2e long); requires OP long (already on).
 2. Lane change: stock needs **blinker + ~≥32 km/h** — no extra toggle.
-3. sunnypilot-style camera offset / MADS only if forking UI (not in this branch).
+3. MADS is wired: the stalk's gentle DOWN emits `ButtonType.lkas` (lateral only) and the detent engages
+   everything, mirroring the car's two OEM modes. Needs the *MADS* toggle on in Settings; *Steering Mode
+   on Brake* decides whether lateral survives the pedal. Camera offset still needs a UI fork.
 
 ### Port hygiene
 1. Keep safety tests green on every TX/safety change; reflash panda when `gwm.h` TX list changes.
@@ -146,8 +149,10 @@ Distance:   wheel follow buttons → gapAdjustCruise → openpilot personality (
 
 | Action | Control |
 |--------|---------|
-| Engage | Gear stalk **DOWN** (in D, moving) |
-| Cancel | Cancel / brake (clears available) |
+| Engage steering only | Gear stalk **gentle DOWN** (in D, moving) — pull again to drop steering |
+| Engage everything | Gear stalk **DOWN to the detent** (in D, moving) |
+| Cancel | Stalk UP / lateral button (clears available) |
+| Brake | Ends longitudinal; steering follows the MADS *Steering Mode on Brake* setting |
 | Set-speed ± | Wheel scroll (±5 km/h) |
 | Personality / follow style | Distance buttons → **relaxed / standard / aggressive** |
 | Gas pedal | Longitudinal override (OEM may still announce) |

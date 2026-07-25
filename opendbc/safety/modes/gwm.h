@@ -18,10 +18,14 @@
 #define GWM_MAIN_BUS 0U
 #define GWM_CAMERA_BUS  2U
 
-// MK4 owns its own cruise loop (FLAG_GWM_OP_CRUISE): arm controls on the gentle-DOWN stalk gesture
-// (GWM_GEAR_STALK) instead of the FURTHER_DOWN-only msg 161 bit47. Set in gwm_init from the safety param.
+// MK4 owns its own cruise loop (FLAG_GWM_OP_CRUISE): arm controls off the DOWN stalk gestures on
+// GWM_GEAR_STALK instead of the FURTHER_DOWN-only msg 161 bit47. Set in gwm_init from the safety param.
+// The two gestures are split so the car's two OEM modes map onto MADS: any DOWN raises acc_main_on
+// (which is what mads_state_update watches for lateral), only the hard detent engages longitudinal.
 static bool gwm_op_cruise = false;
 static bool gear_stalk_down_prev = false;
+static bool gear_stalk_detent_prev = false;
+static bool gwm_cruise_engaged = false;
 // MK4 steers by angle (FLAG_GWM_ANGLE_CONTROL): STEER_CMD carries a 14-bit angle at bytes 17-18
 // instead of the MK3 10-bit torque at bytes 12-13. Set in gwm_init from the safety param.
 static bool gwm_angle_control = false;
@@ -125,28 +129,50 @@ static void gwm_rx_hook(const CANPacket_t *msg) {
 
       bool cruise_button = GET_BIT(msg, 47U);
       // enter controls on the rising edge of the FURTHER_DOWN stalk gesture (MK3 / non-op-cruise only;
-      // MK4 op-cruise arms off the gentle-DOWN gesture on GWM_GEAR_STALK below)
+      // MK4 op-cruise arms off the GWM_GEAR_STALK gestures below)
       if (!gwm_op_cruise && cruise_button && !cruise_button_prev) {
         acc_main_on = true;
       }
-      // exit controls once cancel (UP / lateral button) or brake is pressed — applies to both paths
+      // exit controls once cancel (UP / lateral button) or brake is pressed
       bool cancel_button = GET_BIT(msg, 46U);
-      if (cancel_button || brake_pressed) {
-        acc_main_on = false;
+      if (gwm_op_cruise) {
+        // MK4: brake ends the longitudinal engagement only. acc_main_on is the MAIN switch, so it survives
+        // the brake and mads_state_update decides what happens to lateral (per MadsSteeringMode). Cancel is
+        // the hard off for both. Mirrors carstate.py, which keeps main_on latched across a brake press.
+        if (cancel_button || brake_pressed) {
+          gwm_cruise_engaged = false;
+        }
+        if (cancel_button) {
+          acc_main_on = false;
+        }
+      } else {
+        if (cancel_button || brake_pressed) {
+          acc_main_on = false;
+        }
+        pcm_cruise_check(acc_main_on);
       }
-      pcm_cruise_check(acc_main_on);
       cruise_button_prev =  cruise_button ? 1 : 0;
     }
 
-    // MK4 op-cruise: enter controls on the rising edge of the gentle-or-further DOWN stalk gesture.
-    // Cancel/brake still disarm via GWM_ADAS_ACTIVATION above. carstate engages openpilot on the same bit.
+    // MK4 op-cruise: any DOWN gesture arms the main switch (lateral / MADS); only the hard FURTHER_DOWN
+    // detent enters longitudinal controls. Cancel/brake disarm via GWM_ADAS_ACTIVATION above.
+    // carstate engages openpilot off the same two bits.
     if (gwm_op_cruise && (msg->addr == GWM_GEAR_STALK)) {
       bool stalk_down = GET_BIT(msg, 14U);
+      bool stalk_detent = stalk_down && GET_BIT(msg, 12U);
+      // both are rising-edge gated so a gesture held through a cancel can't re-arm anything
       if (stalk_down && !gear_stalk_down_prev) {
         acc_main_on = true;
       }
-      pcm_cruise_check(acc_main_on);
+      if (stalk_detent && !gear_stalk_detent_prev) {
+        gwm_cruise_engaged = true;
+      }
       gear_stalk_down_prev = stalk_down;
+      gear_stalk_detent_prev = stalk_detent;
+    }
+
+    if (gwm_op_cruise) {
+      pcm_cruise_check(gwm_cruise_engaged);
     }
   }
 }
@@ -263,7 +289,7 @@ static safety_config gwm_init(uint16_t param) {
   // Separate array so MK3 (which has no 0xC7) doesn't fault on a missing message.
   static RxCheck gwm_op_cruise_rx_checks[] = {
     GWM_COMMON_RX_CHECKS
-    {.msg = {{GWM_GEAR_STALK, GWM_MAIN_BUS, 8, 20U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}}, // MK4: gentle-DOWN engage gesture
+    {.msg = {{GWM_GEAR_STALK, GWM_MAIN_BUS, 8, 20U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}}, // MK4: DOWN engage gestures (gentle = lateral, further = full)
   };
 
   gen_crc_lookup_table_8(0x1D, gwm_crc8_lut_1d);
@@ -271,6 +297,8 @@ static safety_config gwm_init(uint16_t param) {
   bool gwm_longitudinal = false;
   gwm_op_cruise = false;
   gear_stalk_down_prev = false;
+  gear_stalk_detent_prev = false;
+  gwm_cruise_engaged = false;
   gwm_angle_control = false;
 #ifdef ALLOW_DEBUG
   const int FLAG_GWM_LONG_CONTROL = 1;

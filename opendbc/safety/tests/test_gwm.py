@@ -171,9 +171,11 @@ class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest, 
 
 
 class TestGwmOpCruiseSafety(unittest.TestCase):
-  """MK4 owns its own cruise loop (pcmCruise=False): the panda arms controls on the gentle-or-further
-  DOWN stalk gesture (msg 0xC7 GEAR_STALK bit STALK_DOWN), not the FURTHER_DOWN-only msg 161 bit47 that
-  the MK3 path uses. Cancel (msg 161) and brake still disarm. Uses the MK4 DBC + the OP_CRUISE flag."""
+  """MK4 owns its own cruise loop (pcmCruise=False) and arms off msg 0xC7 GEAR_STALK, not the
+  FURTHER_DOWN-only msg 161 bit47 the MK3 path uses. The stalk's two DOWN gestures are split so the
+  car's two OEM modes map onto MADS: any DOWN raises acc_main_on (the MAIN switch, what MADS watches
+  for lateral), only the hard STALK_FURTHER detent enters longitudinal controls. Cancel disarms both;
+  brake ends longitudinal only. Uses the MK4 DBC + the OP_CRUISE flag."""
 
   mk4 = "gwm_haval_h6_mk4_generated"
   TX_MSGS = None  # rx-only arm test; excludes this class from the cross-mode TX scan in common.py
@@ -188,18 +190,30 @@ class TestGwmOpCruiseSafety(unittest.TestCase):
   def _rx(self, msg):
     return self.safety.safety_rx_hook(msg)
 
-  def _gear_stalk_msg(self, down):
-    return self.packer.make_can_msg_safety("GEAR_STALK", 0, {"STALK_DOWN": 1 if down else 0})
+  def _gear_stalk_msg(self, down, further=False):
+    values = {"STALK_DOWN": 1 if down else 0, "STALK_FURTHER": 1 if further else 0}
+    return self.packer.make_can_msg_safety("GEAR_STALK", 0, values)
 
   def _stalk_msg(self, enable=0, cancel=0):
     values = {"AP_ENABLE_COMMAND": enable, "AP_CANCEL_COMMAND": cancel}
     return self.packer.make_can_msg_safety("STEER_AND_AP_STALK", 0, values, fix_checksum=checksum)
 
-  def test_gentle_down_engages(self):
+  def _brake_msg(self, pressed):
+    return self.packer.make_can_msg_safety("BRAKE2", 0, {"PEDAL_BRAKE_PRESSED": 1 if pressed else 0})
+
+  def test_gentle_down_arms_main_only(self):
+    # gentle DOWN is the lateral-only gesture: MAIN switch on, longitudinal controls stay closed
+    self.assertFalse(self.safety.get_acc_main_on())
+    self._rx(self._gear_stalk_msg(False))
+    self._rx(self._gear_stalk_msg(True))  # rising edge of STALK_DOWN
+    self.assertTrue(self.safety.get_acc_main_on())
+    self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_further_down_engages(self):
     self.assertFalse(self.safety.get_controls_allowed())
     self._rx(self._gear_stalk_msg(False))
-    self.assertFalse(self.safety.get_controls_allowed())
-    self._rx(self._gear_stalk_msg(True))  # rising edge of STALK_DOWN
+    self._rx(self._gear_stalk_msg(True, further=True))
+    self.assertTrue(self.safety.get_acc_main_on())
     self.assertTrue(self.safety.get_controls_allowed())
 
   def test_further_down_161_does_not_engage(self):
@@ -209,18 +223,29 @@ class TestGwmOpCruiseSafety(unittest.TestCase):
     self.assertFalse(self.safety.get_controls_allowed())
 
   def test_cancel_disengages(self):
-    self._rx(self._gear_stalk_msg(True))
+    self._rx(self._gear_stalk_msg(True, further=True))
     self.assertTrue(self.safety.get_controls_allowed())
     self._rx(self._stalk_msg(cancel=1))
     self.assertFalse(self.safety.get_controls_allowed())
+    self.assertFalse(self.safety.get_acc_main_on())
+
+  def test_brake_ends_longitudinal_but_keeps_main(self):
+    # MADS owns the lateral decision on brake, so the MAIN switch must survive it
+    self._rx(self._gear_stalk_msg(True, further=True))
+    self.assertTrue(self.safety.get_controls_allowed())
+    self._rx(self._brake_msg(True))
+    self._rx(self._stalk_msg())
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertTrue(self.safety.get_acc_main_on())
 
   def test_no_engage_without_rising_edge(self):
-    # a held STALK_DOWN (no rest in between) must not re-arm after a cancel
-    self._rx(self._gear_stalk_msg(True))
+    # a held gesture (no rest in between) must not re-arm after a cancel
+    self._rx(self._gear_stalk_msg(True, further=True))
     self.assertTrue(self.safety.get_controls_allowed())
     self._rx(self._stalk_msg(cancel=1))
     self.assertFalse(self.safety.get_controls_allowed())
-    self._rx(self._gear_stalk_msg(True))  # still high, no rising edge -> stays disarmed
+    self._rx(self._gear_stalk_msg(True, further=True))  # still high, no rising edge -> stays disarmed
+    self.assertFalse(self.safety.get_acc_main_on())
     self.assertFalse(self.safety.get_controls_allowed())
 
 
@@ -252,10 +277,10 @@ class TestGwmMk4AngleSafety(common.AngleSteeringSafetyTest):
     self.safety.init_tests()
     self.VM = VehicleModel(CarInterface.get_non_essential_params(CAR.GWM_HAVAL_H6_MK4))
     # every 0xA1 rx runs the cruise state machine (pcm_cruise_check), and the angle measurement
-    # lives on 0xA1 — prime acc_main_on via the GEAR_STALK engage gesture so measurement frames
+    # lives on 0xA1 — prime the cruise latch via the GEAR_STALK detent gesture so measurement frames
     # don't disengage controls mid-test (re-engagement still needs a fresh rising edge)
-    self._rx(self.packer.make_can_msg_safety("GEAR_STALK", 0, {"STALK_DOWN": 0}))
-    self._rx(self.packer.make_can_msg_safety("GEAR_STALK", 0, {"STALK_DOWN": 1}))
+    self._rx(self.packer.make_can_msg_safety("GEAR_STALK", 0, {"STALK_DOWN": 0, "STALK_FURTHER": 0}))
+    self._rx(self.packer.make_can_msg_safety("GEAR_STALK", 0, {"STALK_DOWN": 1, "STALK_FURTHER": 1}))
 
   def _speed_msg(self, speed):
     # wheel speed signal is kph (factor 0.05924739); tests pass m/s
