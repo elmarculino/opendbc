@@ -238,6 +238,7 @@ class CarController(CarControllerBase):
         steer_required=CC.latActive,
         is_mk4=self.is_mk4,
         hud_stock_raw=CS.hud_stock_raw if self.is_mk4 else None,
+        cancel_demote=self.is_mk4 and self.cancel_demote_frames > 0,
       ))
 
     # MK4 OP_CRUISE: re-TX camera ACC (0x2AB) onto main with openpilot set speed so the Haval
