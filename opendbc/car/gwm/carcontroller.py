@@ -29,11 +29,11 @@ MK4_HANDS_ON_ANGLE_GAIN = 8    # extra spoofed torque per deg of |apply_angle| (
 
 # MK4 carcontroller lat_active latch (NOT carstate.steeringPressed — that is the separate shared-code
 # steerOverride event at torque>120). This path drops latActive for STEER_CMD only. Tuned for fully
-# hands-off use: OVERRIDE_TORQUE=100 so a deliberate grab takes over cleanly (route 110 grabs 44–214
-# failed when this sat at 120). Instant path above OEM hands-on (~102). Debounce absorbs spikes.
-OVERRIDE_TORQUE = 100          # sustained |driver torque| to hand off (= MK3 MAX_USER_TORQUE)
-OVERRIDE_INSTANT_TORQUE = 150  # firm grab -> release within one frame
-OVERRIDE_FRAMES = 7            # ~70 ms @100 Hz
+# hands-off use. 100 sustained was the "soquinho" cause: EPS reaction torque up to ~134 hands-off
+# in light curves (routes 56/57/58). 130/170/10 keeps real grabs with zero hands-off trips.
+OVERRIDE_TORQUE = 130          # sustained |driver torque| to hand off; hands-off peaks (~134) are single frames
+OVERRIDE_INSTANT_TORQUE = 170  # firm grab -> release within one frame
+OVERRIDE_FRAMES = 10           # ~100 ms @100 Hz
 # Hold lat off ~1 s after override (OEM-style) so OP does not re-grab every torque dip.
 OVERRIDE_HOLD_FRAMES = 100
 
@@ -69,6 +69,8 @@ class CarController(CarControllerBase):
     # while engaged (OEM: icon always on when ACC active). Avoid thrashing distance every frame.
     self.acc_cluster_set_kph: float | None = None
     self.acc_cluster_follow: int | None = None
+    self.enabled_prev = False        # MK4: falling-edge detect for the quiet-cancel grace
+    self.cancel_demote_frames = 0    # MK4: frames left masking the camera's 0x0a standby step post-cancel
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
@@ -92,6 +94,16 @@ class CarController(CarControllerBase):
         self.override_active = True
         self.override_hold = OVERRIDE_HOLD_FRAMES
       lat_active = CC.latActive and not self.override_active
+
+      # Quiet-cancel grace: on disengage, hold ~2 s masking the camera's 0x1a->0x0a standby step
+      # on the 0x2AB re-TX so the cluster sees one state transition, not the dual-beep pair.
+      if CC.enabled:
+        self.cancel_demote_frames = 0
+      elif self.enabled_prev:
+        self.cancel_demote_frames = 200  # ~2 s @100 Hz
+      else:
+        self.cancel_demote_frames = max(0, self.cancel_demote_frames - 1)
+      self.enabled_prev = CC.enabled
     else:
       lat_active = CC.latActive and abs(CS.out.steeringTorque) < MAX_USER_TORQUE
 
@@ -115,6 +127,17 @@ class CarController(CarControllerBase):
         apply_angle = apply_steer_angle_limits_vm(target_angle, self.apply_angle_last,
                                                   CS.out.vEgoRaw, CS.out.steeringAngleDeg, lat_active,
                                                   CarControllerParams, self.VM)
+        # MK4 low-speed hunt damp: extra rate schedule on top of MAX_ANGLE_RATE (routes 70/72/73).
+        if self.is_mk4 and lat_active:
+          v_kph = float(CS.out.vEgoRaw) * CV.MS_TO_KPH
+          max_rate = float(np.interp(
+            v_kph,
+            [CarControllerParams.MK4_ANGLE_RATE_V_LO, CarControllerParams.MK4_ANGLE_RATE_V_HI],
+            [CarControllerParams.MK4_ANGLE_RATE_LOW, CarControllerParams.MK4_ANGLE_RATE_HIGH],
+          ))
+          apply_angle = float(np.clip(apply_angle,
+                                      self.apply_angle_last - max_rate,
+                                      self.apply_angle_last + max_rate))
         # MK4: stop the command from winding far past the measured wheel during EPS under-execution
         # (see MK4_ANGLE_ERROR_MAX). When the EPS is not granting angle authority (A_RX != 1), use a
         # tighter band so we don't keep pushing opposite-signed commands into a non-tracking EPS.
@@ -203,6 +226,7 @@ class CarController(CarControllerBase):
           is_mk4=self.is_mk4,
           regen=self.regen_brake,
           braking=braking,
+          longitudinal_stock_raw=CS.acc_cmd_stock_raw if self.is_mk4 else None,
         ))
 
     if self.frame % 5 == 0:  # 20 Hz
@@ -213,6 +237,7 @@ class CarController(CarControllerBase):
         hud_stock_values=CS.hud_stock_values,
         steer_required=CC.latActive,
         is_mk4=self.is_mk4,
+        hud_stock_raw=CS.hud_stock_raw if self.is_mk4 else None,
       ))
 
     # MK4 OP_CRUISE: re-TX camera ACC (0x2AB) onto main with openpilot set speed so the Haval
@@ -241,6 +266,8 @@ class CarController(CarControllerBase):
             new_follow = 4 if hud.leadDistanceBars >= 3 else int(hud.leadDistanceBars)
             if self.acc_cluster_follow is None or new_follow != self.acc_cluster_follow:
               self.acc_cluster_follow = new_follow
+          if self.acc_cluster_follow is None:
+            self.acc_cluster_follow = 3
           follow = self.acc_cluster_follow
         else:
           self.acc_cluster_set_kph = None
@@ -250,6 +277,7 @@ class CarController(CarControllerBase):
           set_speed_kph=set_kph,
           follow_dashes=follow,
           cruise_active=cruise_active,
+          cancel_demote=self.cancel_demote_frames > 0,
         ))
 
     new_actuators = actuators.as_builder()

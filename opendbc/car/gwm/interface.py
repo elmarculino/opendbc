@@ -71,6 +71,10 @@ class CarInterface(CarInterfaceBase):
           # Camera ACC (0x2AB) on cam bus — re-TX to main with openpilot set speed (cluster display)
           if address == 0x2AB and src == 2:
             self.CS.acc_stock_raw = bytes(dat)
+          if address == 0x143 and src == 2:
+            self.CS.acc_cmd_stock_raw = bytes(dat)
+          if address == 0x23D and src == 2:
+            self.CS.hud_stock_raw = bytes(dat)
 
     ret, ret_sp = super().update(can_packets)
 
@@ -137,7 +141,9 @@ class CarInterface(CarInterfaceBase):
       # common angle-car band so the planner does not over-correct a lagging EPS.
       # Was 0.15; +50 ms damps stop-and-go path noise. Paired with MAX_ANGLE_RATE 1.0 — if low-speed
       # turns feel sluggish, try lowering delay before raising rate (isolate which knob).
-      ret.steerActuatorDelay = 0.20
+      # 0.15→0.20 helped stop-and-go; routes 70/72/73 still hunted at <40 kph.
+      # 0.20→0.28 + speed-scaled rate in carcontroller (MK4_ANGLE_RATE_*).
+      ret.steerActuatorDelay = 0.28
       # MK4 owns its own cruise loop: openpilot manages engagement + set-speed from the wheel buttons
       # (carstate buttonEvents). The camera's ACC_SPEED_SELECTION freezes, so carcontroller re-TXes 0x2AB
       # onto main with VCruiseHelper's set speed for the OEM cluster (create_acc_cluster_mk4).

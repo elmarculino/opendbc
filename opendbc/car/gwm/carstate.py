@@ -20,6 +20,11 @@ ButtonType = structs.CarState.ButtonEvent.Type
 MK4_CRUISE_LONG_PRESS = 50  # mirrors CRUISE_LONG_PRESS in selfdrive/car/cruise.py
 MK4_SCROLL_HOLD = MK4_CRUISE_LONG_PRESS + 4  # 54
 
+# MK4 steeringPressed hysteresis (shared EventName.steerOverride):
+# ON 155 / OFF 120 — hands-off EPS peaks still hit ~140 (routes 70/72/73).
+MK4_STEER_PRESSED_ON = 155
+MK4_STEER_PRESSED_OFF = 120
+
 
 class CarState(CarStateBase):
   def __init__(self, CP, CP_SP):
@@ -28,6 +33,8 @@ class CarState(CarStateBase):
     self.eps_stock_values = {}
     self.eps_stock_raw = None  # MK4: raw bytes of the last EPS RX_STEER_RELATED (0x147) frame, for the camera hands-on keepalive
     self.acc_stock_raw = None  # MK4: raw bytes of camera ACC (0x2AB), for cluster set-speed re-TX
+    self.acc_cmd_stock_raw = None  # MK4: raw ACC_CMD (0x143) — packer zeros unmodeled bytes
+    self.hud_stock_raw = None  # MK4: raw LATERAL_STATE (0x23D) for cluster/HUD chrome
     self.camera_stock_values = {}
     self.longitudinal_stock_values = {}
     self.hud_stock_values = {}
@@ -36,6 +43,7 @@ class CarState(CarStateBase):
     self.is_activation_lever_pulled = False
     self.prev_activation_lever_pulled = False
     self.main_on = False
+    self.steer_pressed_latched = False  # MK4 hysteresis for steeringPressed
 
     # MK4 own-cruise (pcmCruise=False) button/engage state (see update()).
     self.prev_enable_gesture = False
@@ -144,12 +152,15 @@ class CarState(CarStateBase):
     else:
       ret.steeringTorqueEps = cp.vl["RX_STEER_RELATED"]["B_RX_EPS_TORQUE"]
     # Two independent lateral gates on MK4 (do not conflate):
-    # (1) steeringPressed (here): shared car_specific EventName.steerOverride / OVERRIDE_LATERAL. Threshold
-    #     120 ≈ OEM "hands-on" recognition (~102+) so light torque does not spam the shared event. MK3=50.
-    # (2) carcontroller OVERRIDE_TORQUE (100) + debounce: drops lat_active on a sustained grab for the
-    #     angle command path. Tuned for fully hands-off driving (clean takeovers), not "rest a hand".
+    # (1) steeringPressed: hysteresis ON 155 / OFF 120 — was flat 120; hands-off peaks ~140.
+    # (2) carcontroller OVERRIDE_TORQUE (130) + debounce: drops lat_active on a sustained grab.
     if self.CP.carFingerprint == CAR.GWM_HAVAL_H6_MK4:
-      ret.steeringPressed = abs(ret.steeringTorque) > 120
+      tq = abs(ret.steeringTorque)
+      if self.steer_pressed_latched:
+        self.steer_pressed_latched = tq > MK4_STEER_PRESSED_OFF
+      else:
+        self.steer_pressed_latched = tq > MK4_STEER_PRESSED_ON
+      ret.steeringPressed = self.steer_pressed_latched
     else:
       ret.steeringPressed = abs(ret.steeringTorque) > 50
 
@@ -235,7 +246,7 @@ class CarState(CarStateBase):
       self.prev_cancel = int(cancel)
       self.prev_drive_mode = drive_mode
 
-      ret.cruiseState.available = self.main_on
+      ret.cruiseState.available = bool(drive_mode == 1) and not ret.accFaulted
       # pcmCruise=False: selfdrived owns cruiseState.enabled — don't set it here.
     else:
       # MK3 (unchanged): pcmCruise=True, engage latch off the AP_ENABLE stalk gesture's falling edge.
