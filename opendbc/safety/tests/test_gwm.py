@@ -335,6 +335,15 @@ class TestGwmMk4AngleSafety(common.AngleSteeringSafetyTest):
     # passthrough idle frame (enable low, angle at measured wheel) is fine
     self.assertTrue(self._tx(self._angle_cmd_msg(0, False)))
 
+  def test_steer_tx_while_brake(self):
+    # OP_CRUISE: brake must not drop controls_allowed, and angle TX must still pass.
+    self.assertTrue(self.safety.get_controls_allowed())
+    self._rx(self.packer.make_can_msg_safety("BRAKE2", 0, {"PEDAL_BRAKE_PRESSED": 1}))
+    self.assertTrue(self.safety.get_controls_allowed())
+    self._reset_speed_measurement(10.0)
+    self._reset_angle_measurement(0)
+    self.assertTrue(self._tx(self._angle_cmd_msg(0, True)))
+
 
 class TestGwmMk4TxSafety(common.SafetyTest):
   """TX whitelist / forwarding / relay-malfunction checks under the full MK4 flag set

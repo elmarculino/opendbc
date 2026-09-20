@@ -3,6 +3,7 @@ from opendbc.can.parser import CANParser
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.gwm.values import DBC, CAR
+from opendbc.car.gwm.mk4_stalk import update_mk4_down_gestures
 import copy
 
 GearShifter = structs.CarState.GearShifter
@@ -200,20 +201,14 @@ class CarState(CarStateBase):
       enable_gesture = bool(cp.vl["GEAR_STALK"]["STALK_DOWN"])
       further = bool(cp.vl["GEAR_STALK"]["STALK_FURTHER"])
       # DOWN is the same physical motion as shifting N→D / R→D, so gate engagement to when the gear
-      # is already D (this frame and last) and the car is moving — a gear shift must not auto-engage. Latch
-      # the decision at the gesture's rising edge so it holds for the whole press.
+      # is already D (this frame and last) and the car is moving — a gear shift must not auto-engage.
       gear_d = drive_mode == 1 and self.prev_drive_mode == 1
-      if enable_gesture and not self.prev_enable_gesture:
-        self.engage_latch = gear_d and abs(ret.vEgoRaw) > 0.5
-        self.gesture_fired = False
-      # Full engage fires as soon as the hard detent shows up; the lateral-only pulse fires on RELEASE of a
-      # gesture that never reached the detent, so a hard pull that sweeps through gentle does not toggle LKAS.
-      engage = int(enable_gesture and further and self.engage_latch)
-      if engage and not self.prev_engage:
-        self.main_on = True
-        self.gesture_fired = True
-      lkas = int(self.prev_enable_gesture and not enable_gesture and self.engage_latch and not self.gesture_fired)
-      if lkas:
+      engage, lkas, self.engage_latch, self.gesture_fired = update_mk4_down_gestures(
+        enable_gesture=enable_gesture, further=further, gear_d=gear_d, v_ego=ret.vEgoRaw,
+        prev_enable_gesture=self.prev_enable_gesture, engage_latch=self.engage_latch,
+        gesture_fired=self.gesture_fired, prev_engage=self.prev_engage,
+      )
+      if engage or lkas:
         self.main_on = True
 
       # Wheel scroll = set-speed +/-. Each momentary click is stretched into a synthetic long-press so
@@ -270,8 +265,9 @@ class CarState(CarStateBase):
   def update_button_enable(self, buttonEvents):
     if not self.CP.pcmCruise:
       for b in buttonEvents:
-        # Detent (setCruise) or wheel +/- engage ACC. Gentle DOWN is ButtonType.lkas — not here.
-        if b.type in (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.setCruise) and not b.pressed:
+        # Detent press (setCruise) engages ACC. Wheel +/- only changes set-speed.
+        # Gentle DOWN is ButtonType.lkas — not here.
+        if b.type == ButtonType.setCruise and b.pressed:
           return True
     return False
 
