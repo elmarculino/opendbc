@@ -63,6 +63,9 @@ bool brake_pressed = false;
 bool brake_pressed_prev = false;
 bool regen_braking = false;
 bool regen_braking_prev = false;
+// Default true (stock). GWM OP_CRUISE clears this so brake keeps controls_allowed
+// (MADS: drop ACC in selfdrived, keep LKAS). Long TX is still blocked in gwm_tx_hook.
+bool disengage_on_brake = true;
 bool steering_disengage;
 bool steering_disengage_prev;
 bool cruise_engaged_prev = false;
@@ -351,14 +354,14 @@ static void relay_malfunction_set(void) {
 static void generic_rx_checks(void) {
   gas_pressed_prev = gas_pressed;
 
-  // exit controls on rising edge of brake press
-  if (brake_pressed && (!brake_pressed_prev || vehicle_moving)) {
+  // exit controls on rising edge of brake press (stock). GWM OP_CRUISE skips this.
+  if (disengage_on_brake && brake_pressed && (!brake_pressed_prev || vehicle_moving)) {
     controls_allowed = false;
   }
   brake_pressed_prev = brake_pressed;
 
   // exit controls on rising edge of regen paddle
-  if (regen_braking && (!regen_braking_prev || vehicle_moving)) {
+  if (disengage_on_brake && regen_braking && (!regen_braking_prev || vehicle_moving)) {
     controls_allowed = false;
   }
   regen_braking_prev = regen_braking;
@@ -433,6 +436,7 @@ int set_safety_hooks(uint16_t mode, uint16_t param) {
   brake_pressed_prev = false;
   regen_braking = false;
   regen_braking_prev = false;
+  disengage_on_brake = true;
   steering_disengage = false;
   steering_disengage_prev = false;
   cruise_engaged_prev = false;

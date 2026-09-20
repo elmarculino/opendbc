@@ -341,10 +341,23 @@ class TestGwmMk4AngleSafety(common.AngleSteeringSafetyTest):
     # OP_CRUISE: brake must not drop controls_allowed, and angle TX must still pass.
     self.assertTrue(self.safety.get_controls_allowed())
     self._rx(self.packer.make_can_msg_safety("BRAKE2", 0, {"PEDAL_BRAKE_PRESSED": 1}))
+    self._rx(self.packer.make_can_msg_safety("STEER_AND_AP_STALK", 0, {"AP_CANCEL_COMMAND": 0}, fix_checksum=checksum))
     self.assertTrue(self.safety.get_controls_allowed())
     self._reset_speed_measurement(10.0)
     self._reset_angle_measurement(0)
     self.assertTrue(self._tx(self._angle_cmd_msg(0, True)))
+
+  def _acc_cmd_msg(self, gas=0, brake=0):
+    values = {"GAS_CMD": gas, "BRAKE_CMD": -brake}
+    return self.packer.make_can_msg_safety("ACC_CMD", 0, values)
+
+  def test_active_long_blocked_while_brake(self):
+    self.assertTrue(self.safety.get_controls_allowed())
+    self._rx(self.packer.make_can_msg_safety("BRAKE2", 0, {"PEDAL_BRAKE_PRESSED": 1}))
+    self._rx(self.packer.make_can_msg_safety("STEER_AND_AP_STALK", 0, {"AP_CANCEL_COMMAND": 0}, fix_checksum=checksum))
+    self.assertTrue(self.safety.get_controls_allowed())
+    self.assertTrue(self._tx(self._acc_cmd_msg(0, 0)))
+    self.assertFalse(self._tx(self._acc_cmd_msg(100, 0)))
 
 
 class TestGwmMk4TxSafety(common.SafetyTest):

@@ -264,6 +264,7 @@ extern bool brake_pressed;
 extern bool brake_pressed_prev;
 extern bool regen_braking;
 extern bool regen_braking_prev;
+extern bool disengage_on_brake;
 extern bool steering_disengage;
 extern bool steering_disengage_prev;
 extern bool cruise_engaged_prev;
