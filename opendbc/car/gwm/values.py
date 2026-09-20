@@ -26,8 +26,14 @@ class CarControllerParams:
     # Low-speed backstop (jerk limit governs at speed). Was 2.0°/20ms (=100°/s): crawl hunting in
     # stop-and-go (route 00000008). 1.0 (=50°/s) softens wiggle; may rate-limit tight low-speed turns
     # (parking/roundabout) — paired with steerActuatorDelay 0.20; if over-damped, raise rate first.
-    MAX_ANGLE_RATE=1.0,     # deg per 20ms frame (= 50 deg/s)
+    MAX_ANGLE_RATE=1.0,     # deg per 20ms frame (= 50 deg/s); low-speed extra cap in carcontroller
   )
+
+  # MK4 extra angle-rate schedule (deg/20ms), applied after apply_steer_angle_limits_vm.
+  MK4_ANGLE_RATE_LOW = 0.6       # <= MK4_ANGLE_RATE_V_LO
+  MK4_ANGLE_RATE_HIGH = 1.0      # >= MK4_ANGLE_RATE_V_HI (matches ANGLE_LIMITS.MAX_ANGLE_RATE)
+  MK4_ANGLE_RATE_V_LO = 25.0     # kph
+  MK4_ANGLE_RATE_V_HI = 45.0     # kph
 
   # MK4: clamp the commanded angle to within this many deg of the MEASURED wheel. The EPS under-executes
   # angle offsets (~0.76x), so when the wheel trails, the model winds the command far past it (rails to
@@ -91,6 +97,7 @@ GREATWALLMOTORS_VERSION_RESPONSE = bytes([uds.SERVICE_TYPE.READ_DATA_BY_IDENTIFI
 GREATWALLMOTORS_RX_OFFSET = 0x6a
 
 FW_QUERY_CONFIG = FwQueryConfig(
+  fw_version_regex=br"[\x00-\xff]*",
   requests=[request for bus, obd_multiplexing in [(1, True), (1, False), (0, False)] for request in [
     Request(
       [GREATWALLMOTORS_VERSION_REQUEST_MULTI],
