@@ -358,6 +358,7 @@ class TestGwmMk4AngleSafety(common.AngleSteeringSafetyTest):
     self.assertTrue(self.safety.get_controls_allowed())
     self.assertTrue(self._tx(self._acc_cmd_msg(0, 0)))
     self.assertFalse(self._tx(self._acc_cmd_msg(100, 0)))
+    self.assertFalse(self._tx(self._acc_cmd_msg(0, 10)))
 
 
 class TestGwmMk4TxSafety(common.SafetyTest):
