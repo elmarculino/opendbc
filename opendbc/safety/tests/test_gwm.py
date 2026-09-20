@@ -5,7 +5,7 @@ import numpy as np
 from opendbc.can.dbc import DBC
 from opendbc.car.gwm.values import CAR, GwmSafetyFlags
 from opendbc.car.gwm.interface import CarInterface
-from opendbc.car.lateral import AngleSteeringLimits, get_max_angle_delta_vm, get_max_angle_vm
+from opendbc.car.lateral import AngleSteeringLimitsVM, get_max_angle_delta_vm, get_max_angle_vm
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.car.structs import CarParams
 import opendbc.safety.tests.common as common
@@ -26,9 +26,9 @@ class SafetyAngleParams:
   ISO lateral accel/jerk plus the average-road-roll allowance. The car-side CarControllerParams is
   intentionally tighter (3.0 / 2.5), so the safety boundary must be tested with these values."""
   STEER_STEP = 2  # 50 Hz command rate at the 100 Hz control step
-  ANGLE_LIMITS = AngleSteeringLimits(360, ([], []), ([], []),
-                                     MAX_LATERAL_ACCEL=3.0 + 9.81 * 0.06,
-                                     MAX_LATERAL_JERK=3.0 + 9.81 * 0.06)
+  ANGLE_LIMITS = AngleSteeringLimitsVM(360,
+                                       MAX_LATERAL_ACCEL=3.0 + 9.81 * 0.06,
+                                       MAX_LATERAL_JERK=3.0 + 9.81 * 0.06)
 
 
 opendbc = "gwm_haval_h6_mk3_generated"
