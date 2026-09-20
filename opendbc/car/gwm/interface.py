@@ -166,10 +166,7 @@ class CarInterface(CarInterfaceBase):
       ret.safetyConfigs[-1].safetyParam |= GwmSafetyFlags.LONG_CONTROL.value
 
       ret.longitudinalActuatorDelay = 0.25
-      ret.vEgoStopping = 0.25
-      ret.vEgoStarting = 0.25
       ret.stopAccel = -0.75
-      ret.stoppingDecelRate = 0.75
       ret.longitudinalTuning.kiBP = [0.]
       ret.longitudinalTuning.kiV = [0.4]
 

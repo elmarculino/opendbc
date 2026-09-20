@@ -116,7 +116,6 @@ class CarState(CarStateBase):
     else:
       ret.gasPressed = cp.vl["CAR_OVERALL_SIGNALS2"]["GAS_POSITION"] > 0
     ret.brakePressed = cp.vl["BRAKE2"]["PEDAL_BRAKE_PRESSED"] != 0
-    ret.brake = cp.vl["BRAKE"]["BRAKE_PRESSURE"] if not ret.brakePressed else 0
 
     if self.CP.carFingerprint == CAR.GWM_HAVAL_H6_MK4:
       drive_mode = int(cp.vl["DRIVE_GEAR"]["DRIVE_MODE_GEAR_REAL"])
