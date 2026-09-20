@@ -49,6 +49,24 @@ class TestMk4Stalk(unittest.TestCase):
     _, _, latch, _ = _step(True, True, gear_d=True, v_ego=0.0)
     self.assertFalse(latch)
 
+  def test_standstill_emits_no_gesture_at_all(self):
+    # openpilot's car_events suppresses preEnableStandstill ("Release Brake to Engage") for this
+    # platform so lateral can engage with a foot on the brake. That is only safe because no gesture
+    # -- engage or lkas -- can be produced below 0.5 m/s. Keep the two in lockstep.
+    for v_ego in (0.0, 0.4, -0.4):
+      with self.subTest(v_ego=v_ego):
+        engage, lkas, latch, fired = _step(True, True, gear_d=True, v_ego=v_ego)
+        self.assertFalse(latch)
+        self.assertEqual(engage, 0)
+        self.assertEqual(lkas, 0)
+        # gentle release of the same never-latched gesture must stay silent too
+        _, lkas_release, _, _ = _step(False, False, prev_enable=True, latch=latch, fired=fired)
+        self.assertEqual(lkas_release, 0)
+
+  def test_gesture_latches_once_moving(self):
+    _, _, latch, _ = _step(True, True, gear_d=True, v_ego=0.6)
+    self.assertTrue(latch)
+
 
 class TestMk4ButtonEnable(unittest.TestCase):
   @classmethod

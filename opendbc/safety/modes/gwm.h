@@ -211,6 +211,10 @@ static bool gwm_tx_hook(const CANPacket_t *msg) {
       int gas_raw = ((msg->data[27] & 0x1FU) << 8) | (msg->data[28]);
       gas_raw = gas_raw - 192;
       // OP_CRUISE + user brake: keep lat (controls_allowed) but reject active ACC.
+      // Expect a 1-2 frame rejection burst on every brake application: this fires the moment
+      // brake_pressed goes high, while CC.longActive only drops after the selfdrived->controlsd
+      // round trip, so in-flight active frames (gas mode sends BRAKE_CMD=-41, i.e. brake_raw=41)
+      // are still on the wire. Benign, not a fault.
       if (gwm_op_cruise && brake_pressed) {
         violation |= (gas_raw != GWM_LONG_LIMITS.inactive_gas);
         violation |= (brake_raw != 0);
