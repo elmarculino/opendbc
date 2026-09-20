@@ -67,6 +67,22 @@ class TestMk4Stalk(unittest.TestCase):
     _, _, latch, _ = _step(True, True, gear_d=True, v_ego=0.6)
     self.assertTrue(latch)
 
+  def test_latch_decided_at_press_edge_survives_the_hold(self):
+    # The latch is evaluated once, on the gesture's rising edge, and deliberately NOT re-checked
+    # while the stalk is held: the engagement decision was legitimate when the driver made it.
+    # Pinning this so a later change to the hold behaviour is a conscious one.
+    engage, _, latch, fired = _step(True, True, gear_d=True, v_ego=10.0)
+    self.assertTrue(latch)
+    self.assertEqual(engage, 1)
+    # car comes to a stop / leaves D mid-hold: the latch is kept, the gesture stays live
+    engage, _, latch, fired = _step(True, True, gear_d=False, v_ego=0.0,
+                                    prev_enable=True, latch=latch, fired=True, prev_engage=1)
+    self.assertTrue(latch)
+    self.assertEqual(engage, 1)
+    # ...but a fresh press under those same conditions latches nothing
+    _, _, latch, _ = _step(True, True, gear_d=False, v_ego=0.0)
+    self.assertFalse(latch)
+
 
 class TestMk4ButtonEnable(unittest.TestCase):
   @classmethod
