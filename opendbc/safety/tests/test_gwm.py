@@ -173,7 +173,7 @@ class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest, 
 class TestGwmOpCruiseSafety(unittest.TestCase):
   """MK4 owns its own cruise loop (pcmCruise=False): the panda arms controls on the gentle-or-further
   DOWN stalk gesture (msg 0xC7 GEAR_STALK bit STALK_DOWN), not the FURTHER_DOWN-only msg 161 bit47 that
-  the MK3 path uses. Cancel (msg 161) and brake still disarm. Uses the MK4 DBC + the OP_CRUISE flag."""
+  the MK3 path uses. Cancel (msg 161) still disarms; brake does not (MADS: keep lat). Uses the MK4 DBC + the OP_CRUISE flag."""
 
   mk4 = "gwm_haval_h6_mk4_generated"
   TX_MSGS = None  # rx-only arm test; excludes this class from the cross-mode TX scan in common.py
@@ -213,6 +213,12 @@ class TestGwmOpCruiseSafety(unittest.TestCase):
     self.assertTrue(self.safety.get_controls_allowed())
     self._rx(self._stalk_msg(cancel=1))
     self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_brake_keeps_controls(self):
+    self._rx(self._gear_stalk_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed())
+    self._rx(self.packer.make_can_msg_safety("BRAKE2", 0, {"PEDAL_BRAKE_PRESSED": 1}))
+    self.assertTrue(self.safety.get_controls_allowed())
 
   def test_no_engage_without_rising_edge(self):
     # a held STALK_DOWN (no rest in between) must not re-arm after a cancel

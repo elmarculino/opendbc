@@ -129,9 +129,10 @@ static void gwm_rx_hook(const CANPacket_t *msg) {
       if (!gwm_op_cruise && cruise_button && !cruise_button_prev) {
         acc_main_on = true;
       }
-      // exit controls once cancel (UP / lateral button) or brake is pressed — applies to both paths
+      // Cancel (UP / lateral button) always disarms. Brake disarms stock/MK3 cruise only:
+      // MK4 OP_CRUISE keeps controls_allowed so selfdrived can drop ACC and leave LKAS on.
       bool cancel_button = GET_BIT(msg, 46U);
-      if (cancel_button || brake_pressed) {
+      if (cancel_button || (!gwm_op_cruise && brake_pressed)) {
         acc_main_on = false;
       }
       pcm_cruise_check(acc_main_on);
@@ -139,7 +140,7 @@ static void gwm_rx_hook(const CANPacket_t *msg) {
     }
 
     // MK4 op-cruise: enter controls on the rising edge of the gentle-or-further DOWN stalk gesture.
-    // Cancel/brake still disarm via GWM_ADAS_ACTIVATION above. carstate engages openpilot on the same bit.
+    // Cancel still disarms via GWM_ADAS_ACTIVATION above; brake does not.
     if (gwm_op_cruise && (msg->addr == GWM_GEAR_STALK)) {
       bool stalk_down = GET_BIT(msg, 14U);
       if (stalk_down && !gear_stalk_down_prev) {
