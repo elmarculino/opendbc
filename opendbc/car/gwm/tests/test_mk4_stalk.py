@@ -50,5 +50,40 @@ class TestMk4Stalk(unittest.TestCase):
     self.assertFalse(latch)
 
 
+class TestMk4ButtonEnable(unittest.TestCase):
+  @classmethod
+  def setUpClass(cls):
+    try:
+      from opendbc.car.gwm.carstate import CarState
+      from opendbc.car import structs
+    except ImportError as e:
+      raise unittest.SkipTest(str(e))
+    cls.CarState = CarState
+    cls.ButtonType = structs.CarState.ButtonEvent.Type
+
+  def _cs(self):
+    obj = self.CarState.__new__(self.CarState)
+    obj.CP = type("CP", (), {"pcmCruise": False})()
+    return obj
+
+  def _be(self, typ, pressed):
+    return type("BE", (), {"type": typ, "pressed": pressed})()
+
+  def test_detent_press_enables(self):
+    cs = self._cs()
+    self.assertTrue(cs.update_button_enable([self._be(self.ButtonType.setCruise, True)]))
+    self.assertFalse(cs.update_button_enable([self._be(self.ButtonType.setCruise, False)]))
+
+  def test_wheel_does_not_enable(self):
+    cs = self._cs()
+    for typ in (self.ButtonType.accelCruise, self.ButtonType.decelCruise):
+      for pressed in (True, False):
+        self.assertFalse(cs.update_button_enable([self._be(typ, pressed)]))
+
+  def test_lkas_does_not_enable(self):
+    cs = self._cs()
+    self.assertFalse(cs.update_button_enable([self._be(self.ButtonType.lkas, True)]))
+
+
 if __name__ == "__main__":
   unittest.main()

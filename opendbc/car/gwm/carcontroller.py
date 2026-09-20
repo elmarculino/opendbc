@@ -257,8 +257,8 @@ class CarController(CarControllerBase):
         hud = CC.hudControl
         set_kph = None
         follow = None
-        cruise_active = bool(CC.enabled)
-        if CC.enabled:
+        cruise_active = bool(CC.longActive)
+        if CC.longActive:
           raw = float(hud.setSpeed) * CV.MS_TO_KPH if hud.speedVisible else 0.0
           if 0.0 < raw < 200.0:
             self.acc_cluster_set_kph = raw

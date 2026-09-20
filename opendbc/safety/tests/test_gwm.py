@@ -218,6 +218,8 @@ class TestGwmOpCruiseSafety(unittest.TestCase):
     self._rx(self._gear_stalk_msg(True))
     self.assertTrue(self.safety.get_controls_allowed())
     self._rx(self.packer.make_can_msg_safety("BRAKE2", 0, {"PEDAL_BRAKE_PRESSED": 1}))
+    # pcm_cruise_check runs on 0xA1 (STEER_AND_AP_STALK), not BRAKE2. Re-run that path.
+    self._rx(self._stalk_msg(enable=0, cancel=0))
     self.assertTrue(self.safety.get_controls_allowed())
 
   def test_no_engage_without_rising_edge(self):

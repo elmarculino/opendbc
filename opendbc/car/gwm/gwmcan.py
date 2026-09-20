@@ -282,8 +282,7 @@ def create_hud_command(packer, CAN: CanBus, hud_stock_values, steer_required, is
       # LKAS_STATE=5 packs as bits 3-5 of byte17 (0x28); keep other chrome bits from camera.
       b[17] = (b[17] & ~0x38) | 0x28
     elif cancel_demote:
-      # Brake/stalk cancel: camera HUD steps through a take-steer warning and the cluster nags.
-      # Force LKAS nibble idle so the dash does not chime; driver already has the pedal.
+      # Force LKAS nibble idle so the dash does not chime on full cancel (CC.enabled falling).
       b[17] = b[17] & ~0x38
     b[16] = checksum(bytes(b[17:24]), 0x66)
     return 0x23D, bytes(b), CAN.main

@@ -129,8 +129,9 @@ static void gwm_rx_hook(const CANPacket_t *msg) {
       if (!gwm_op_cruise && cruise_button && !cruise_button_prev) {
         acc_main_on = true;
       }
-      // Cancel (UP / lateral button) always disarms. Brake disarms stock/MK3 cruise only:
-      // MK4 OP_CRUISE keeps controls_allowed so selfdrived can drop ACC and leave LKAS on.
+      // Cancel (UP / lateral button) always disarms. Brake disarms stock/MK3 cruise only.
+      // MK4 OP_CRUISE keeps controls_allowed on brake so selfdrived can drop ACC and leave LKAS
+      // on. If selfdrived dies while lat-only, only stalk UP (or a panda reset) disarms.
       bool cancel_button = GET_BIT(msg, 46U);
       if (cancel_button || (!gwm_op_cruise && brake_pressed)) {
         acc_main_on = false;
