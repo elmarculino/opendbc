@@ -217,6 +217,41 @@ braking when it should not.
 |---|------|-------|
 | 13 | `.gitmodules` points panda at `elmarculino/panda` **with `branch = mk4-scc-v`** | The recorded SHA pins the build, but the `branch =` line means `git submodule update --remote` picks up whatever that branch has moved to. Firmware identity is not cosmetic here: `pandad` reflashes on signature mismatch at boot. The fork's only delta is `6e6ab257 fix: call safety_tick() without args for current opendbc safety.h` — so the options are upstream that one-liner, drop the `branch =` line and keep the SHA pin, or fold the shim into this repo |
 
+### 5. Route 000000fd--3227e9ca98 — first on-car attempt (FAILED, root-caused)
+
+openpilot engaged exactly once, for 1.4 s at t=148.9 (36.3 km/h, drive), with the panda at
+`controls_allowed = 0` the whole time: every actuator TX was rejected, the car received nothing,
+`ACC.CRUISE_STATE_2` fell to 0 and threw *Cruise Fault: Restart the Car*.
+
+Cause: under `OP_CRUISE`, cancel was the only thing clearing `acc_main_on`, but `controls_allowed`
+also drops on heartbeat-engaged mismatch (openpilot declining the gesture at standstill or in
+reverse), rx check failure, or relay malfunction. The flag stayed latched true and
+`pcm_cruise_check()` only arms on a rising edge, so every later press was ignored. Evidence: 6 stalk
+DOWN edges (18.2, 148.9, 497.1, 524.9, 547.2, 573.0), 3 cancel edges (492.8, 505.1, 541.7), and the
+panda armed on exactly the 4 presses that followed either boot or a cancel — 6/6 match. Fixed in
+`gwm.h` by dropping the stale latch while controls are off; re-arming still needs a fresh DOWN edge.
+
+MADS-lite itself is still **unexercised**: `ButtonType.lkas` was never emitted in the route — all 6
+presses carried `further=True`, so the gentle-DOWN gesture was never performed. §0 stands.
+
+### 6. Comparison against sunnypilot's MADS (the reference implementation)
+
+MADS originates in [sunnypilot](https://github.com/sunnypilot/sunnypilot) (2021–, MIT) and is the
+only widely-driven implementation; FrogPilot's "Always On Lateral" is a later reimplementation of the
+same idea. sunnypilot's lives in `openpilot/sunnypilot/mads/{mads,state,helpers}.py` plus
+`opendbc/safety/sunnypilot/{mads,mads_declarations}.h`, wired into 7 brands
+(chrysler, ford, honda, hyundai, hyundai_canfd, subaru, tesla). So the *feature* follows a known,
+heavily tested pattern — our *implementation* is a much thinner brand-local reduction of it.
+
+| # | Divergence | Reference | Ours | Priority |
+|---|------------|-----------|------|----------|
+| 14 | No separate panda-side lateral arming | `controls_allowed_lateral` is its own global with its own heartbeat (`heartbeat_engaged_mads`, 3-mismatch timeout) and its own disengage-reason bitmask | One `controls_allowed` for both axes; brake made non-disarming via `disengage_on_brake = false`, with `gwm_tx_hook` rejecting active long while `brake_pressed` | Medium — same observable behaviour, but the long block is a per-message check instead of a property of the arming state |
+| 15 | **No lateral controls-mismatch detection** | `ModularAssistiveDrivingSystem.data_sample()` counts `not ps.controlsAllowedLateral` while active and raises `controlsMismatchLateral` after 200 samples (2 s) | nothing | **High — port first.** This is precisely why §5 was silent: 1.4 s of "engaged" with the panda disarmed and no alert |
+| 16 | No `ALTERNATIVE_EXPERIENCE` flag; brake mode hardcoded | `ALT_EXP_ENABLE_MADS` (1024) + `MADS_DISENGAGE_LATERAL_ON_BRAKE` (2048) / `MADS_PAUSE_LATERAL_ON_BRAKE` (4096); three driver-selectable modes | `CP.brand == 'gwm' and not CP.pcmCruise`, fixed at REMAIN_ACTIVE | Low — same as item 11, but note the flag route is the portable one |
+| 17 | Latched `acc_main_on` vs explicit edge tracking | Never latches a "main on" bool: `BinaryStateTracking` records rising/falling edges of acc_main / MADS button / `op_controls_allowed`, re-requests on a rising edge, and `mads_exit_controls()` always clears the pending request. It even enumerates `MADS_DISENGAGE_REASON_HEARTBEAT_ENGAGED_MISMATCH` — our exact bug | latch + `pcm_cruise_check()` rising edge, now with the stale latch dropped while controls are off | Medium — the fix closes the hole; adopting the edge-tracking shape would make it structural |
+| 18 | No MADS state in cereal | Dedicated `custom.ModularAssistiveDrivingSystem` struct and its own state machine with a real `State.paused` | reuses upstream `State.overriding` + `ET.OVERRIDE_LONGITUDINAL` | Low — the reuse is the right call for a "lite" port, but it is why MADS state is invisible in logs (cf. item 8) |
+| 19 | Test coverage | ~35 shared cases in `opendbc/safety/tests/mads_common.py`, run against all 7 brands | 11 cases in `TestGwmOpCruiseSafety` | Medium — the reference suite's brake-pressed-engage, heartbeat-threshold and lateral/longitudinal-split cases have no analogue here |
+
 ---
 
 ## Driver quick reference
