@@ -5,11 +5,11 @@ Community port work for **GWM (Great Wall)** vehicles, with focus on the **2026 
 | Item | Value |
 |------|--------|
 | **Primary target** | `GWM_HAVAL_H6_MK4` (Haval H6 PHEV ~2024–2026) |
-| **Branch (opendbc)** | `mk4-haval-phev-2026` |
+| **Branch (opendbc)** | `mk4-haval-phev-2026` (base) · `mk4-scc-v` (SCC-V + MADS-lite) |
 | **Fork** | [elmarculino/opendbc](https://github.com/elmarculino/opendbc) (based on nGoline / community GWM work) |
 | **openpilot fork** | [elmarculino/openpilot](https://github.com/elmarculino/openpilot) branch `mk4-haval-phev-2026` (submodule → this opendbc) |
 | **Device** | comma four · openpilot ~0.11.1 |
-| **Last major doc update** | 2026-07-23 |
+| **Last major doc update** | 2026-09-21 (SCC-V + MADS-lite review) |
 
 ---
 
@@ -144,12 +144,78 @@ Distance:   wheel follow buttons → gapAdjustCruise → openpilot personality (
 ### Product / UX
 1. Experimental Mode for **traffic lights / stop signs** (e2e long); requires OP long (already on).
 2. Lane change: stock needs **blinker + ~≥32 km/h** — no extra toggle.
-3. sunnypilot-style camera offset / MADS only if forking UI (not in this branch).
+3. sunnypilot-style camera offset. MADS-lite and SCC-V now exist on branch `mk4-scc-v` -- see **SCC-V + MADS-lite** below.
 
 ### Port hygiene
 1. Keep safety tests green on every TX/safety change; reflash panda when `gwm.h` TX list changes.
 2. Do not thrash dual lat knobs in one commit without road A/B.
 3. Ignore local `_routes/` logs in git (analysis only).
+
+---
+
+## SCC-V + MADS-lite — post-validation review
+
+Landed on openpilot fork branch `mk4-scc-v` (opendbc submodule branch `mk4-scc-v`).
+Feature toggle `SmartCruiseControlVision` now defaults **off**.
+
+**Nothing below is road-validated.** PR #2's test plan is 100% unchecked, so the
+blocker table comes first — the calibration items are unanswerable without route
+data, and the convention items are not worth churn before the behaviour is known
+good.
+
+Architecture verdict (2026-09-21 review): sound. MADS reuses upstream's
+`State.overriding` / `ET.OVERRIDE_LONGITUDINAL` rather than inventing a state, so
+`state.py` is untouched; the brake-drops-long invariant is enforced in panda C
+(`gwm_tx_hook`, with `test_brake_keeps_controls`), not only in Python; the panda
+fork carries exactly one commit and it is build glue, no safety logic. SCC-V is
+structurally unable to speed the car up — `v_cruise = min(...)` plus
+`min(candidates, key=a_target)` in the planner, so its `leaving` `+0.5` always
+loses to whichever source wants less. The only reachable failure direction is
+braking when it should not.
+
+### 0. Blocker — on-car validation
+
+| Check | Expect |
+|-------|--------|
+| Brake/regen with ACC live | ACC drops, LKAS holds. A 1–2 frame TX rejection burst on every brake application is benign and documented in `gwm.h` — confirm it stays 1–2 frames and does not escalate to a panda fault |
+| Gentle DOWN vs detent | gentle = lateral only; detent = both |
+| Stalk UP | cancels both, from either state |
+| ACC enable while braking | lands `State.overriding`, never `State.enabled` (`mads_h6.py:49`) |
+| `selfdrived` killed while engaged | heartbeat timeout disarms |
+| SCC-V in real curves >20 km/h | decel is felt, and `entering → turning → leaving` in the route matches actual lateral accel |
+
+### 1. Calibration (needs route data)
+
+| # | Item | Why |
+|---|------|-----|
+| 1 | `_A_LAT_REG_MAX = 2.0` vs upstream `_A_TOTAL_MAX_V = [1.7, 3.2]` @ `[20, 40]` m/s | Two uncoordinated curve models. At 72 km/h SCC-V targets 2.0 m/s² lateral while `get_cruise_accel`'s friction circle budgets 1.7 m/s² *total*. Either drive SCC-V off the same interp or document the split deliberately |
+| 2 | Entry/exit thresholds `1.3 / 1.6 / 1.3 / 1.1` | Inherited from sunnypilot, untuned for a tall PHEV SUV. This port already limits the angle path at `MAX_LATERAL_ACCEL = 3.0`; SCC-V starts braking at 1.3, so the two can fight |
+| 3 | 97th percentile over the **whole** model horizon, unweighted | A curve 8 s out weighs the same as one 2 s out. The only time-awareness in the module is `× _NO_OVERSHOOT_TIME_HORIZON = 4.0`. Consider weighting by time-to-reach, or truncating the horizon |
+| 4 | `entering → turning` handoff is discontinuous | `entering` interpolates on `max_pred_lat_acc` (−0.2 → −1.0 over 1.3 → 3.0); `turning` interpolates on `current_lat_acc` (+0.5 → −0.4 over 1.5 → 3.0). At the transition the command can step from ≈−1.0 to ≈+0.4. Look for the jerk in a route before deciding whether the downstream jerk limit absorbs it |
+| 5 | No rate limit on SCC-V's own `a_target` | Relies entirely on downstream jerk limiting; see #4 |
+
+### 2. Observability (do before tuning — #1 is unmeasurable without it)
+
+| # | Item | Notes |
+|---|------|-------|
+| 6 | SCC-V accel is labelled `LongitudinalPlanSource.cruise` (`longitudinal_planner.py:151`) | Logs cannot distinguish curve braking from cruise braking. Add `turnSpeed @5` to `LongitudinalPlanSource` — a small enum, low fork-collision risk, unlike an `EventName` ordinal |
+| 7 | `EventName.gasPressedOverride` reused for the brake-held override (`selfdrived.py:276`) | Correct `ET` and an empty `AlertSize.none` alert, so the driver sees nothing wrong — but the log says "gas pressed" with a foot on the brake. A dedicated event burns a scarce `EventName` ordinal upstream reuses; a `carState`/`selfdriveState` field is the cheaper fix |
+| 8 | Nothing publishes the SCC-V state machine | `entering/turning/leaving` is invisible in a route, which makes #1–#5 guesswork. Needs a debug field before any tuning pass |
+
+### 3. Layering / conventions
+
+| # | Item | Notes |
+|---|------|-------|
+| 9 | `Params()` read inside `SmartCruiseControlVision.__init__`, polled every 3 s in `plannerd` | Breaks the params → `selfdrived` → cereal convention (cf. `sm['selfdriveState'].experimentalMode`). Move the toggle onto `selfdriveState` |
+| 10 | `mads_h6.py` is named after a car | Upstream names modules by function. Rename to `mads.py` |
+| 11 | Gate is `CP.brand == 'gwm' and not CP.pcmCruise` (`mads_h6.py:15`) | A brand string test. Replace with a `GWMFlags.MADS_LITE` bit in `values.py`, matching how other brands gate behaviour — otherwise a future GWM with OP cruise silently inherits MADS |
+| 12 | Toggle default | Now `"0"` in `params_keys.h`. Revisit only after §0 passes |
+
+### 4. Reproducibility
+
+| # | Item | Notes |
+|---|------|-------|
+| 13 | `.gitmodules` points panda at `elmarculino/panda` **with `branch = mk4-scc-v`** | The recorded SHA pins the build, but the `branch =` line means `git submodule update --remote` picks up whatever that branch has moved to. Firmware identity is not cosmetic here: `pandad` reflashes on signature mismatch at boot. The fork's only delta is `6e6ab257 fix: call safety_tick() without args for current opendbc safety.h` — so the options are upstream that one-liner, drop the `branch =` line and keep the SHA pin, or fold the shim into this repo |
 
 ---
 
