@@ -196,11 +196,13 @@ braking when it should not.
 
 ### 2. Observability (do before tuning — #1 is unmeasurable without it)
 
+Items 6 and 8 are done; a route now carries everything #1–#5 need. Item 7 is still open.
+
 | # | Item | Notes |
 |---|------|-------|
-| 6 | SCC-V accel is labelled `LongitudinalPlanSource.cruise` (`longitudinal_planner.py:151`) | Logs cannot distinguish curve braking from cruise braking. Add `turnSpeed @5` to `LongitudinalPlanSource` — a small enum, low fork-collision risk, unlike an `EventName` ordinal |
+| 6 | **DONE** — SCC-V accel now reports `LongitudinalPlanSource.turnSpeed` | `turnSpeed @5` appended to the enum in `log.capnp`; `longitudinal_planner.py` labels the SCC-V candidate with it. Only consumer of the field is `tools/replay/ui.py`, which `str()`s it, so nothing else had to change. Appended, never renumbered — an existing ordinal would silently remap old routes |
 | 7 | `EventName.gasPressedOverride` reused for the brake-held override (`selfdrived.py:276`) | Correct `ET` and an empty `AlertSize.none` alert, so the driver sees nothing wrong — but the log says "gas pressed" with a foot on the brake. A dedicated event burns a scarce `EventName` ordinal upstream reuses; a `carState`/`selfdriveState` field is the cheaper fix |
-| 8 | Nothing publishes the SCC-V state machine | `entering/turning/leaving` is invisible in a route, which makes #1–#5 guesswork. Needs a debug field before any tuning pass |
+| 8 | **DONE** — SCC-V state machine is published | `longitudinalPlan.sccv` group (`state`, `currentLatAcc`, `maxPredLatAcc`, `vTarget`, `aTarget`) at ordinals 40–44, plus the `SmartCruiseControlVisionState` enum. Published every cycle including while disabled: a gap in the trace would be ambiguous between "feature off" and "plannerd stalled". `publish()` assigns `VisionState(...).name` into the capnp enum, so a state added to the Python `IntEnum` without a matching enumerant would raise in plannerd mid-drive — `test_every_vision_state_is_loggable` guards that coupling |
 
 ### 3. Layering / conventions
 
