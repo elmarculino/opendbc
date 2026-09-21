@@ -144,6 +144,15 @@ static void gwm_rx_hook(const CANPacket_t *msg) {
     // MK4 op-cruise: enter controls on the rising edge of the gentle-or-further DOWN stalk gesture.
     // Cancel still disarms via GWM_ADAS_ACTIVATION above; brake does not.
     if (gwm_op_cruise && (msg->addr == GWM_GEAR_STALK)) {
+      // Cancel is the only thing that clears acc_main_on on this path, but controls_allowed can also
+      // drop without it: heartbeat-engaged mismatch (openpilot declined the gesture, e.g. wrong gear
+      // or standstill), an rx check failure, or relay malfunction. acc_main_on would stay latched
+      // true, and pcm_cruise_check() only arms on a rising edge -- so every later stalk press would
+      // be silently ignored until the driver happened to cancel. Drop the stale latch while controls
+      // are off; re-arming still needs a fresh DOWN edge, so this cannot arm on its own.
+      if (!controls_allowed) {
+        acc_main_on = false;
+      }
       bool stalk_down = GET_BIT(msg, 14U);
       if (stalk_down && !gear_stalk_down_prev) {
         acc_main_on = true;

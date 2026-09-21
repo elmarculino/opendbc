@@ -231,6 +231,41 @@ class TestGwmOpCruiseSafety(unittest.TestCase):
     self._rx(self._gear_stalk_msg(True))  # still high, no rising edge -> stays disarmed
     self.assertFalse(self.safety.get_controls_allowed())
 
+  def test_rearm_after_controls_dropped_without_cancel(self):
+    # regression: controls_allowed can drop without a cancel press (heartbeat-engaged mismatch when
+    # openpilot declines the gesture -- wrong gear or standstill -- an rx check failure, or relay
+    # malfunction). acc_main_on used to stay latched, so no later stalk press could ever re-arm.
+    # Observed on route 000000fd--3227e9ca98: openpilot engaged for 1.4 s with controls_allowed=0.
+    self._rx(self._gear_stalk_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed())
+
+    self.safety.set_controls_allowed(False)  # something other than cancel disarmed us
+    self._rx(self._gear_stalk_msg(False))    # driver lets the lever rest
+    self.assertFalse(self.safety.get_controls_allowed())
+
+    self._rx(self._gear_stalk_msg(True))     # fresh DOWN edge must arm again
+    self.assertTrue(self.safety.get_controls_allowed())
+
+  def test_stale_latch_drop_does_not_arm_by_itself(self):
+    # dropping the stale latch must never arm on its own: it still takes a rising edge.
+    self._rx(self._gear_stalk_msg(True))
+    self.safety.set_controls_allowed(False)
+    for _ in range(5):
+      self._rx(self._gear_stalk_msg(False))
+      self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_held_stalk_does_not_rearm_after_controls_dropped(self):
+    # lever still held down when controls drop -> needs a release before it can arm again
+    self._rx(self._gear_stalk_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed())
+    self.safety.set_controls_allowed(False)
+    for _ in range(5):
+      self._rx(self._gear_stalk_msg(True))
+      self.assertFalse(self.safety.get_controls_allowed())
+    self._rx(self._gear_stalk_msg(False))
+    self._rx(self._gear_stalk_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed())
+
 
 class TestGwmMk4AngleSafety(common.AngleSteeringSafetyTest):
   """MK4 (angle control): the panda validates the 14-bit STEER_CMD angle with
