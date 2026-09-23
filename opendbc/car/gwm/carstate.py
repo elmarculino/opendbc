@@ -3,6 +3,7 @@ from opendbc.can.parser import CANParser
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.gwm.values import DBC, CAR
+from opendbc.car.gwm.mk4_stalk import update_mk4_down_gestures
 import copy
 
 GearShifter = structs.CarState.GearShifter
@@ -65,6 +66,8 @@ class CarState(CarStateBase):
     self.prev_dist_down = 0
     self.prev_cancel = 0
     self.prev_drive_mode = -1
+    self.prev_lkas = 0
+    self.gesture_fired = False
 
   def update(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.main]
@@ -113,7 +116,6 @@ class CarState(CarStateBase):
     else:
       ret.gasPressed = cp.vl["CAR_OVERALL_SIGNALS2"]["GAS_POSITION"] > 0
     ret.brakePressed = cp.vl["BRAKE2"]["PEDAL_BRAKE_PRESSED"] != 0
-    ret.brake = cp.vl["BRAKE"]["BRAKE_PRESSURE"] if not ret.brakePressed else 0
 
     if self.CP.carFingerprint == CAR.GWM_HAVAL_H6_MK4:
       drive_mode = int(cp.vl["DRIVE_GEAR"]["DRIVE_MODE_GEAR_REAL"])
@@ -191,18 +193,21 @@ class CarState(CarStateBase):
     if self.CP.carFingerprint == CAR.GWM_HAVAL_H6_MK4:
       # MK4 runs its OWN cruise loop (pcmCruise=False): engagement + set-speed + personality come from
       # the wheel/stalk buttons, NOT the OEM ACC (which freezes its set speed once openpilot owns the car).
-      # Engagement is the gentle-or-further DOWN stalk gesture (msg 0xC7 GEAR_STALK bit STALK_DOWN) so a
-      # gentle DOWN also engages, not just the hard FURTHER_DOWN detent. The panda arms its controls latch
-      # on the same bit (gwm.h, gated on GwmSafetyFlags.OP_CRUISE).
+      # The stalk's two DOWN gestures (msg 0xC7 GEAR_STALK) map onto two modes:
+      #   gentle DOWN  (STALK_DOWN=1, STALK_FURTHER=0) -> ButtonType.lkas, lateral only (toggles on release)
+      #   FURTHER_DOWN (STALK_DOWN=1, STALK_FURTHER=1) -> ButtonType.setCruise, lateral + ACC
+      # The panda arms controls_allowed on any STALK_DOWN (gwm.h, GwmSafetyFlags.OP_CRUISE).
       enable_gesture = bool(cp.vl["GEAR_STALK"]["STALK_DOWN"])
+      further = bool(cp.vl["GEAR_STALK"]["STALK_FURTHER"])
       # DOWN is the same physical motion as shifting N→D / R→D, so gate engagement to when the gear
-      # is already D (this frame and last) and the car is moving — a gear shift must not auto-engage. Latch
-      # the decision at the gesture's rising edge so it holds for the whole press.
+      # is already D (this frame and last) and the car is moving — a gear shift must not auto-engage.
       gear_d = drive_mode == 1 and self.prev_drive_mode == 1
-      if enable_gesture and not self.prev_enable_gesture:
-        self.engage_latch = gear_d and abs(ret.vEgoRaw) > 0.5
-      engage = int(enable_gesture and self.engage_latch)
-      if engage and not self.prev_engage:
+      engage, lkas, self.engage_latch, self.gesture_fired = update_mk4_down_gestures(
+        enable_gesture=enable_gesture, further=further, gear_d=gear_d, v_ego=ret.vEgoRaw,
+        prev_enable_gesture=self.prev_enable_gesture, engage_latch=self.engage_latch,
+        gesture_fired=self.gesture_fired, prev_engage=self.prev_engage,
+      )
+      if engage or lkas:
         self.main_on = True
 
       # Wheel scroll = set-speed +/-. Each momentary click is stretched into a synthetic long-press so
@@ -224,7 +229,8 @@ class CarState(CarStateBase):
       dist_up = int(cp.vl["STEER_AND_AP_STALK"]["AP_INCREASE_DISTANCE_COMMAND"])
       dist_down = int(cp.vl["STEER_AND_AP_STALK"]["AP_REDUCE_DISTANCE_COMMAND"])
       ret.buttonEvents = [
-        *create_button_events(engage, self.prev_engage, {1: ButtonType.decelCruise}),
+        *create_button_events(engage, self.prev_engage, {1: ButtonType.setCruise}),
+        *create_button_events(lkas, self.prev_lkas, {1: ButtonType.lkas}),
         *create_button_events(speed_up, self.prev_speed_up, {1: ButtonType.accelCruise}),
         *create_button_events(speed_down, self.prev_speed_down, {1: ButtonType.decelCruise}),
         *create_button_events(dist_up, self.prev_dist_up, {1: ButtonType.gapAdjustCruise}),
@@ -233,6 +239,7 @@ class CarState(CarStateBase):
       ]
       self.prev_enable_gesture = enable_gesture
       self.prev_engage = engage
+      self.prev_lkas = lkas
       self.prev_speed_up, self.prev_speed_down = speed_up, speed_down
       self.prev_dist_up, self.prev_dist_down = dist_up, dist_down
       self.prev_cancel = int(cancel)
@@ -253,6 +260,15 @@ class CarState(CarStateBase):
       ret.cruiseState.enabled = self.main_on
 
     return ret
+
+  def update_button_enable(self, buttonEvents):
+    if not self.CP.pcmCruise:
+      for b in buttonEvents:
+        # Detent press (setCruise) engages ACC. Wheel +/- only changes set-speed.
+        # Gentle DOWN is ButtonType.lkas — not here.
+        if b.type == ButtonType.setCruise and b.pressed:
+          return True
+    return False
 
   @staticmethod
   def get_can_parsers(CP):

@@ -244,6 +244,7 @@ class CarController(CarControllerBase):
         steer_required=CC.latActive,
         is_mk4=self.is_mk4,
         hud_stock_raw=CS.hud_stock_raw if self.is_mk4 else None,
+        cancel_demote=self.is_mk4 and self.cancel_demote_frames > 0,
       ))
 
     # MK4 OP_CRUISE: re-TX camera ACC (0x2AB) onto main with openpilot set speed so the Haval
@@ -256,8 +257,8 @@ class CarController(CarControllerBase):
         hud = CC.hudControl
         set_kph = None
         follow = None
-        cruise_active = bool(CC.enabled)
-        if CC.enabled:
+        cruise_active = bool(CC.longActive)
+        if CC.longActive:
           raw = float(hud.setSpeed) * CV.MS_TO_KPH if hud.speedVisible else 0.0
           if 0.0 < raw < 200.0:
             self.acc_cluster_set_kph = raw

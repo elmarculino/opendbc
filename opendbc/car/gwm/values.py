@@ -3,7 +3,7 @@ from enum import IntFlag
 
 from opendbc.car.structs import CarParams
 from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, uds
-from opendbc.car.lateral import AngleSteeringLimits
+from opendbc.car.lateral import AngleSteeringLimitsVM
 from opendbc.car.docs_definitions import CarDocs, CarHarness, CarParts
 from opendbc.car.fw_query_definitions import FwQueryConfig, Request, p16
 
@@ -17,9 +17,8 @@ class CarControllerParams:
   ACCEL_MIN = -3.5
 
   # MK4 angle-based steering via STEER_REQUEST (14-bit) in STEER_CMD (factor 0.1, offset -779.6).
-  ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
+  ANGLE_LIMITS: AngleSteeringLimitsVM = AngleSteeringLimitsVM(
     360.,                  # STEER_ANGLE_MAX (deg) — hard safety cap on commanded wheel angle
-    ([], []), ([], []),    # v1 rate-limit tables unused (vehicle-model path)
     MAX_LATERAL_ACCEL=3.0,  # m/s^2 (~ISO 11270 comfort; OEM route_7a peaked 3.57, so we're already conservative)
     MAX_LATERAL_JERK=2.5,   # m/s^3 — conservative/smooth
     # Low-speed backstop (jerk limit governs at speed). Was 2.0°/20ms (=100°/s): crawl hunting in
@@ -99,6 +98,7 @@ GREATWALLMOTORS_VERSION_RESPONSE = bytes([uds.SERVICE_TYPE.READ_DATA_BY_IDENTIFI
 GREATWALLMOTORS_RX_OFFSET = 0x6a
 
 FW_QUERY_CONFIG = FwQueryConfig(
+  fw_version_regex=br"[\x00-\xff]*",
   requests=[request for bus, obd_multiplexing in [(1, True), (1, False), (0, False)] for request in [
     Request(
       [GREATWALLMOTORS_VERSION_REQUEST_MULTI],

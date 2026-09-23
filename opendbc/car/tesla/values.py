@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from enum import Enum, IntFlag
-from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, CarSpecs, DbcDict, PlatformConfig, Platforms
-from opendbc.car.lateral import AngleSteeringLimits, ISO_LATERAL_ACCEL
+from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms
+from opendbc.car.lateral import AngleSteeringLimitsVM
 from opendbc.car.structs import CarParams, CarState
 from opendbc.car.docs_definitions import CarDocs, CarFootnote, CarHarness, CarParts, Column
 from opendbc.car.fw_query_definitions import FwQueryConfig, Request, StdQueries
@@ -11,7 +11,8 @@ Ecu = CarParams.Ecu
 
 class Footnote(Enum):
   HW_TYPE = CarFootnote(
-    "Some 2023 model years have HW4. To check which hardware type your vehicle has, look for " +
+    "Model year 2019 can have HW2.5 or HW3, and model years 2023 and 2024 can have HW3 or HW4, depending on build date and factory. " +
+    "To check which hardware type your vehicle has, look for " +
     "<b>Autopilot computer</b> under <b>Software -> Additional Vehicle Information</b> on your vehicle's touchscreen. </br></br>" +
     "See <a href=\"https://www.notateslaapp.com/news/2173/how-to-check-if-your-tesla-has-hardware-4-ai4-or-hardware-3\">this page</a> for more information.",
     Column.MODEL)
@@ -43,7 +44,7 @@ class TeslaPlatformConfig(PlatformConfig):
 class CAR(Platforms):
   TESLA_MODEL_3 = TeslaPlatformConfig(
     [
-      # TODO: do we support 2017? It's HW3
+      TeslaCarDocsHW3("Tesla Model 3 (with HW2.5) 2019"),
       TeslaCarDocsHW3("Tesla Model 3 (with HW3) 2019-23"),
       TeslaCarDocsHW4("Tesla Model 3 (with HW4) 2024-25"),
     ],
@@ -52,8 +53,8 @@ class CAR(Platforms):
   )
   TESLA_MODEL_Y = TeslaPlatformConfig(
     [
-      TeslaCarDocsHW3("Tesla Model Y (with HW3) 2020-23"),
-      TeslaCarDocsHW4("Tesla Model Y (with HW4) 2024-25"),
+      TeslaCarDocsHW3("Tesla Model Y (with HW3) 2020-24"),
+      TeslaCarDocsHW4("Tesla Model Y (with HW4) 2023-25"),
     ],
     CarSpecs(mass=2072., wheelbase=2.890, steerRatio=12.0),
     {Bus.party: 'tesla_model3_party', Bus.radar: 'tesla_radar_continental_generated'},
@@ -65,6 +66,7 @@ class CAR(Platforms):
 
 
 FW_QUERY_CONFIG = FwQueryConfig(
+  fw_version_regex=br".+,[EYX]\d?[A-Z]*\d{3}\.\d+(?:\.\d+)?",
   requests=[
     Request(
       [StdQueries.TESTER_PRESENT_REQUEST, StdQueries.SUPPLIER_SOFTWARE_VERSION_REQUEST],
@@ -74,17 +76,19 @@ FW_QUERY_CONFIG = FwQueryConfig(
   ]
 )
 
-# Cars with this EPS FW have FSD 14 and use TeslaFlags.FSD_14
+# Cars with this EPS FW have the 3-bit DAS_steeringControlType and use TeslaFlags.DAS_STEERING_3_BIT
 FSD_14_FW = {
   CAR.TESLA_MODEL_3: [
     b'TeMYG4_Main_0.0.0 (77),E4HP015.04.5',
     b'TeMYG4_Main_0.0.0 (78),E4HP015.05.0',
     b'TeMYG4_Main_0.0.0 (77),E4H015.04.5',
+    b'TeMYG4_Main_0.0.0 (78),E4H015.05.0',
   ],
   CAR.TESLA_MODEL_Y: [
     b'TeMYG4_Legacy3Y_0.0.0 (6),Y4003.04.0',
     b'TeMYG4_Main_0.0.0 (77),Y4003.05.4',
     b'TeMYG4_Main_0.0.0 (78),Y4003.06.0',
+    b'TeMYG4_Main_0.0.0 (87),Y4003.09.3',
   ]
 }
 
@@ -105,23 +109,10 @@ GEAR_MAP = {
 }
 
 
-# Add extra tolerance for average banked road since safety doesn't have the roll
-AVERAGE_ROAD_ROLL = 0.06  # ~3.4 degrees, 6% superelevation. higher actual roll lowers lateral acceleration
-
-
 class CarControllerParams:
-  ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
+  ANGLE_LIMITS: AngleSteeringLimitsVM = AngleSteeringLimitsVM(
     # EPAS faults above this angle
     360,  # deg
-    # Tesla uses a vehicle model instead, check carcontroller.py for details
-    ([], []),
-    ([], []),
-
-    # Vehicle model angle limits
-    # Add extra tolerance for average banked road since safety doesn't have the roll
-    MAX_LATERAL_ACCEL=ISO_LATERAL_ACCEL + (ACCELERATION_DUE_TO_GRAVITY * AVERAGE_ROAD_ROLL),  # ~3.6 m/s^2
-    MAX_LATERAL_JERK=3.0 + (ACCELERATION_DUE_TO_GRAVITY * AVERAGE_ROAD_ROLL),  # ~3.6 m/s^3
-
     # limit angle rate to both prevent a fault and for low speed comfort (~12 mph rate down to 0 mph)
     MAX_ANGLE_RATE=5,  # deg/20ms frame, EPS faults at 12 at a standstill
   )
@@ -135,12 +126,16 @@ class CarControllerParams:
 
 class TeslaSafetyFlags(IntFlag):
   LONG_CONTROL = 1
-  FSD_14 = 2
+  DAS_STEERING_3_BIT = 2
 
 
 class TeslaFlags(IntFlag):
   LONG_CONTROL = 1
-  FSD_14 = 2
+  # Newer firmware widened DAS_steeringControlType from 2 to 3 bits (byte 2 bits 7:6 -> 7:5), first in the FSD 14 builds,
+  # then in all builds from 2026.8.6. The values kept their numbers (0 NONE, 1 ANGLE_CONTROL, 2 LANE_KEEP_ASSIST,
+  # 3 EMERGENCY_LANE_KEEP) and 4 FSD was added. The DBC still reads the top 2 bits, which on 3-bit firmware
+  # are 1 for LANE_KEEP_ASSIST (0b010) and 2 for FSD (0b100)
+  DAS_STEERING_3_BIT = 2
   MISSING_DAS_SETTINGS = 4
 
 

@@ -3,8 +3,9 @@ from opendbc.car.tesla.values import CANBUS, CarControllerParams, TeslaFlags
 
 
 def get_steer_ctrl_type(flags: int, ctrl_type: int) -> int:
-  # Returns the flipped signal value for DAS_steeringControlType on FSD 14
-  if flags & TeslaFlags.FSD_14:
+  # On 3-bit firmware, 1 and 2 in the 2-bit signal are LANE_KEEP_ASSIST and FSD (see TeslaFlags.DAS_STEERING_3_BIT),
+  # so openpilot steers with FSD here, and stock LANE_KEEP_ASSIST reads as 1
+  if flags & TeslaFlags.DAS_STEERING_3_BIT:
     return {1: 2, 2: 1}.get(ctrl_type, ctrl_type)
   else:
     return ctrl_type
@@ -16,10 +17,6 @@ class TeslaCAN:
     self.packer = packer
 
   def create_steering_control(self, angle, enabled):
-    # On FSD 14+, ANGLE_CONTROL behavior changed to allow user winddown while actuating.
-    # with openpilot, after overriding w/ ANGLE_CONTROL the wheel snaps back to the original angle abruptly
-    # so we now use LANE_KEEP_ASSIST to match stock FSD.
-    # see carstate.py for more details
     values = {
       "DAS_steeringAngleRequest": -angle,
       "DAS_steeringHapticRequest": 0,
@@ -29,12 +26,7 @@ class TeslaCAN:
     return self.packer.make_can_msg("DAS_steeringControl", CANBUS.party, values)
 
   def create_longitudinal_command(self, acc_state, accel, counter, v_ego, active):
-    from opendbc.car.interfaces import V_CRUISE_MAX
-
-    set_speed = max(v_ego * CV.MS_TO_KPH, 0)
-    if active:
-      # TODO: this causes jerking after gas override when above set speed
-      set_speed = 0 if accel < 0 else V_CRUISE_MAX
+    set_speed = min(max(v_ego + accel, 0) * CV.MS_TO_KPH, 400)
 
     values = {
       "DAS_setSpeed": set_speed,

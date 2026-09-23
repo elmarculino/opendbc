@@ -5,7 +5,7 @@ import numpy as np
 from opendbc.can.dbc import DBC
 from opendbc.car.gwm.values import CAR, GwmSafetyFlags
 from opendbc.car.gwm.interface import CarInterface
-from opendbc.car.lateral import AngleSteeringLimits, get_max_angle_delta_vm, get_max_angle_vm
+from opendbc.car.lateral import AngleSteeringLimitsVM, get_max_angle_delta_vm, get_max_angle_vm
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.car.structs import CarParams
 import opendbc.safety.tests.common as common
@@ -26,9 +26,9 @@ class SafetyAngleParams:
   ISO lateral accel/jerk plus the average-road-roll allowance. The car-side CarControllerParams is
   intentionally tighter (3.0 / 2.5), so the safety boundary must be tested with these values."""
   STEER_STEP = 2  # 50 Hz command rate at the 100 Hz control step
-  ANGLE_LIMITS = AngleSteeringLimits(360, ([], []), ([], []),
-                                     MAX_LATERAL_ACCEL=3.0 + 9.81 * 0.06,
-                                     MAX_LATERAL_JERK=3.0 + 9.81 * 0.06)
+  ANGLE_LIMITS = AngleSteeringLimitsVM(360,
+                                       MAX_LATERAL_ACCEL=3.0 + 9.81 * 0.06,
+                                       MAX_LATERAL_JERK=3.0 + 9.81 * 0.06)
 
 
 opendbc = "gwm_haval_h6_mk3_generated"
@@ -173,7 +173,7 @@ class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest, 
 class TestGwmOpCruiseSafety(unittest.TestCase):
   """MK4 owns its own cruise loop (pcmCruise=False): the panda arms controls on the gentle-or-further
   DOWN stalk gesture (msg 0xC7 GEAR_STALK bit STALK_DOWN), not the FURTHER_DOWN-only msg 161 bit47 that
-  the MK3 path uses. Cancel (msg 161) and brake still disarm. Uses the MK4 DBC + the OP_CRUISE flag."""
+  the MK3 path uses. Cancel (msg 161) still disarms; brake does not (MADS: keep lat). Uses the MK4 DBC + the OP_CRUISE flag."""
 
   mk4 = "gwm_haval_h6_mk4_generated"
   TX_MSGS = None  # rx-only arm test; excludes this class from the cross-mode TX scan in common.py
@@ -214,6 +214,14 @@ class TestGwmOpCruiseSafety(unittest.TestCase):
     self._rx(self._stalk_msg(cancel=1))
     self.assertFalse(self.safety.get_controls_allowed())
 
+  def test_brake_keeps_controls(self):
+    self._rx(self._gear_stalk_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed())
+    self._rx(self.packer.make_can_msg_safety("BRAKE2", 0, {"PEDAL_BRAKE_PRESSED": 1}))
+    # pcm_cruise_check runs on 0xA1 (STEER_AND_AP_STALK), not BRAKE2. Re-run that path.
+    self._rx(self._stalk_msg(enable=0, cancel=0))
+    self.assertTrue(self.safety.get_controls_allowed())
+
   def test_no_engage_without_rising_edge(self):
     # a held STALK_DOWN (no rest in between) must not re-arm after a cancel
     self._rx(self._gear_stalk_msg(True))
@@ -222,6 +230,41 @@ class TestGwmOpCruiseSafety(unittest.TestCase):
     self.assertFalse(self.safety.get_controls_allowed())
     self._rx(self._gear_stalk_msg(True))  # still high, no rising edge -> stays disarmed
     self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_rearm_after_controls_dropped_without_cancel(self):
+    # regression: controls_allowed can drop without a cancel press (heartbeat-engaged mismatch when
+    # openpilot declines the gesture -- wrong gear or standstill -- an rx check failure, or relay
+    # malfunction). acc_main_on used to stay latched, so no later stalk press could ever re-arm.
+    # Observed on route 000000fd--3227e9ca98: openpilot engaged for 1.4 s with controls_allowed=0.
+    self._rx(self._gear_stalk_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed())
+
+    self.safety.set_controls_allowed(False)  # something other than cancel disarmed us
+    self._rx(self._gear_stalk_msg(False))    # driver lets the lever rest
+    self.assertFalse(self.safety.get_controls_allowed())
+
+    self._rx(self._gear_stalk_msg(True))     # fresh DOWN edge must arm again
+    self.assertTrue(self.safety.get_controls_allowed())
+
+  def test_stale_latch_drop_does_not_arm_by_itself(self):
+    # dropping the stale latch must never arm on its own: it still takes a rising edge.
+    self._rx(self._gear_stalk_msg(True))
+    self.safety.set_controls_allowed(False)
+    for _ in range(5):
+      self._rx(self._gear_stalk_msg(False))
+      self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_held_stalk_does_not_rearm_after_controls_dropped(self):
+    # lever still held down when controls drop -> needs a release before it can arm again
+    self._rx(self._gear_stalk_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed())
+    self.safety.set_controls_allowed(False)
+    for _ in range(5):
+      self._rx(self._gear_stalk_msg(True))
+      self.assertFalse(self.safety.get_controls_allowed())
+    self._rx(self._gear_stalk_msg(False))
+    self._rx(self._gear_stalk_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed())
 
 
 class TestGwmMk4AngleSafety(common.AngleSteeringSafetyTest):
@@ -328,6 +371,29 @@ class TestGwmMk4AngleSafety(common.AngleSteeringSafetyTest):
     self.assertFalse(self._tx(self._angle_cmd_msg(0, True)))
     # passthrough idle frame (enable low, angle at measured wheel) is fine
     self.assertTrue(self._tx(self._angle_cmd_msg(0, False)))
+
+  def test_steer_tx_while_brake(self):
+    # OP_CRUISE: brake must not drop controls_allowed, and angle TX must still pass.
+    self.assertTrue(self.safety.get_controls_allowed())
+    self._rx(self.packer.make_can_msg_safety("BRAKE2", 0, {"PEDAL_BRAKE_PRESSED": 1}))
+    self._rx(self.packer.make_can_msg_safety("STEER_AND_AP_STALK", 0, {"AP_CANCEL_COMMAND": 0}, fix_checksum=checksum))
+    self.assertTrue(self.safety.get_controls_allowed())
+    self._reset_speed_measurement(10.0)
+    self._reset_angle_measurement(0)
+    self.assertTrue(self._tx(self._angle_cmd_msg(0, True)))
+
+  def _acc_cmd_msg(self, gas=0, brake=0):
+    values = {"GAS_CMD": gas, "BRAKE_CMD": -brake}
+    return self.packer.make_can_msg_safety("ACC_CMD", 0, values)
+
+  def test_active_long_blocked_while_brake(self):
+    self.assertTrue(self.safety.get_controls_allowed())
+    self._rx(self.packer.make_can_msg_safety("BRAKE2", 0, {"PEDAL_BRAKE_PRESSED": 1}))
+    self._rx(self.packer.make_can_msg_safety("STEER_AND_AP_STALK", 0, {"AP_CANCEL_COMMAND": 0}, fix_checksum=checksum))
+    self.assertTrue(self.safety.get_controls_allowed())
+    self.assertTrue(self._tx(self._acc_cmd_msg(0, 0)))
+    self.assertFalse(self._tx(self._acc_cmd_msg(100, 0)))
+    self.assertFalse(self._tx(self._acc_cmd_msg(0, 10)))
 
 
 class TestGwmMk4TxSafety(common.SafetyTest):

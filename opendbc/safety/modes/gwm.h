@@ -129,9 +129,12 @@ static void gwm_rx_hook(const CANPacket_t *msg) {
       if (!gwm_op_cruise && cruise_button && !cruise_button_prev) {
         acc_main_on = true;
       }
-      // exit controls once cancel (UP / lateral button) or brake is pressed — applies to both paths
+      // Cancel (UP / lateral button) always disarms. Brake disarms stock/MK3 cruise only.
+      // MK4 OP_CRUISE: generic_rx_checks also skips brake (disengage_on_brake=false) so
+      // controls_allowed survives the pedal. gwm_tx_hook still rejects active long while
+      // brake_pressed. If selfdrived dies: heartbeat timeout; UP still disarms.
       bool cancel_button = GET_BIT(msg, 46U);
-      if (cancel_button || brake_pressed) {
+      if (cancel_button || (!gwm_op_cruise && brake_pressed)) {
         acc_main_on = false;
       }
       pcm_cruise_check(acc_main_on);
@@ -139,8 +142,17 @@ static void gwm_rx_hook(const CANPacket_t *msg) {
     }
 
     // MK4 op-cruise: enter controls on the rising edge of the gentle-or-further DOWN stalk gesture.
-    // Cancel/brake still disarm via GWM_ADAS_ACTIVATION above. carstate engages openpilot on the same bit.
+    // Cancel still disarms via GWM_ADAS_ACTIVATION above; brake does not.
     if (gwm_op_cruise && (msg->addr == GWM_GEAR_STALK)) {
+      // Cancel is the only thing that clears acc_main_on on this path, but controls_allowed can also
+      // drop without it: heartbeat-engaged mismatch (openpilot declined the gesture, e.g. wrong gear
+      // or standstill), an rx check failure, or relay malfunction. acc_main_on would stay latched
+      // true, and pcm_cruise_check() only arms on a rising edge -- so every later stalk press would
+      // be silently ignored until the driver happened to cancel. Drop the stale latch while controls
+      // are off; re-arming still needs a fresh DOWN edge, so this cannot arm on its own.
+      if (!controls_allowed) {
+        acc_main_on = false;
+      }
       bool stalk_down = GET_BIT(msg, 14U);
       if (stalk_down && !gear_stalk_down_prev) {
         acc_main_on = true;
@@ -205,11 +217,20 @@ static bool gwm_tx_hook(const CANPacket_t *msg) {
     if (msg->addr == GWM_LONG_CONTROL) {
       int brake_raw = msg->data[13];
       brake_raw = 181 - brake_raw;
-      violation |= longitudinal_brake_checks(brake_raw, GWM_LONG_LIMITS);
-
       int gas_raw = ((msg->data[27] & 0x1FU) << 8) | (msg->data[28]);
       gas_raw = gas_raw - 192;
-      violation |= longitudinal_gas_checks(gas_raw, GWM_LONG_LIMITS);
+      // OP_CRUISE + user brake: keep lat (controls_allowed) but reject active ACC.
+      // Expect a 1-2 frame rejection burst on every brake application: this fires the moment
+      // brake_pressed goes high, while CC.longActive only drops after the selfdrived->controlsd
+      // round trip, so in-flight active frames (gas mode sends BRAKE_CMD=-41, i.e. brake_raw=41)
+      // are still on the wire. Benign, not a fault.
+      if (gwm_op_cruise && brake_pressed) {
+        violation |= (gas_raw != GWM_LONG_LIMITS.inactive_gas);
+        violation |= (brake_raw != 0);
+      } else {
+        violation |= longitudinal_brake_checks(brake_raw, GWM_LONG_LIMITS);
+        violation |= longitudinal_gas_checks(gas_raw, GWM_LONG_LIMITS);
+      }
     }
   }
 
@@ -279,6 +300,9 @@ static safety_config gwm_init(uint16_t param) {
   gwm_longitudinal = GET_FLAG(param, FLAG_GWM_LONG_CONTROL);
   gwm_op_cruise = GET_FLAG(param, FLAG_GWM_OP_CRUISE);
   gwm_angle_control = GET_FLAG(param, FLAG_GWM_ANGLE_CONTROL);
+  if (gwm_op_cruise) {
+    disengage_on_brake = false;
+  }
 #else
   SAFETY_UNUSED(param);
 #endif
