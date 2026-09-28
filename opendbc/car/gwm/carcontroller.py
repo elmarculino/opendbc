@@ -40,6 +40,8 @@ OVERRIDE_INSTANT_TORQUE = 170  # firm grab -> release within one frame
 OVERRIDE_FRAMES = 10           # ~100 ms @100 Hz
 # Hold lat off ~1 s after override (OEM-style) so OP does not re-grab every torque dip.
 OVERRIDE_HOLD_FRAMES = 100
+# MK4 HUD: below this speed controlsd drops latActive (standstill), but the LKAS icon stays on while engaged.
+MK4_HUD_STANDSTILL_SPEED = 0.5  # m/s (controlsd standstill gate is 0.3)
 
 
 # MK4 regen-lead: BRAKE_GAS_STATE (regen enable) uses a light accel hysteresis so cruise chatter around
@@ -74,7 +76,40 @@ class CarController(CarControllerBase):
     self.acc_cluster_set_kph: float | None = None
     self.acc_cluster_follow: int | None = None
     self.enabled_prev = False        # MK4: falling-edge detect for the quiet-cancel grace
-    self.cancel_demote_frames = 0    # MK4: frames left masking the camera's 0x0a standby step post-cancel
+    self.long_active_prev = False    # MK4: falling-edge detect for the MADS brake-cancel grace
+    self.cancel_demote_frames = 0    # MK4: frames left masking the camera's 0x0a standby step post-cancel (0x2AB)
+    self.lkas_demote_frames = 0      # MK4: frames left forcing LKAS_STATE 0 post full disengage (0x23D)
+
+  def update_quiet_cancel(self, CC, gas_pressed: bool):
+    # Quiet-cancel grace: on disengage, hold ~2 s masking the camera's 0x1a->0x0a standby step
+    # on the 0x2AB re-TX (see create_acc_cluster_mk4) so the cluster sees one state transition,
+    # not the dual-beep pair. Re-engage clears it immediately.
+    # MADS: a brake drops only longActive (enabled stays True for lateral), so the ACC grace must also
+    # arm on the longActive falling edge (routes 107/109: 0x1a->0x0a OEM chime on every MADS brake).
+    # Not on gas: the gas override path (0x1a<->0x2a) is silent and must keep following the camera.
+    if CC.longActive:
+      self.cancel_demote_frames = 0
+    elif (self.enabled_prev and not CC.enabled) or (self.long_active_prev and not gas_pressed):
+      self.cancel_demote_frames = 200  # ~2 s @100 Hz
+    else:
+      self.cancel_demote_frames = max(0, self.cancel_demote_frames - 1)
+    # LKAS demote stays tied to the full disengage: MADS keeps lateral (and its HUD) through a brake.
+    if CC.enabled:
+      self.lkas_demote_frames = 0
+    elif self.enabled_prev:
+      self.lkas_demote_frames = 200
+    else:
+      self.lkas_demote_frames = max(0, self.lkas_demote_frames - 1)
+    self.enabled_prev = CC.enabled
+    self.long_active_prev = CC.longActive
+
+  def hud_steer_required(self, CC, CS) -> bool:
+    # MK4: latActive drops at standstill (steerAtStandstill=False) while lateral stays engaged, which
+    # stepped LKAS 5->0->5 on the cluster at every stop (routes 107/109). Keep LKAS shown through a
+    # stop while engaged; a real disengage still clears it via the LKAS demote.
+    if self.is_mk4:
+      return bool(CC.latActive or (CC.enabled and CS.out.vEgo < MK4_HUD_STANDSTILL_SPEED))
+    return bool(CC.latActive)
 
   def update(self, CC, CS, now_nanos):
     can_sends = []
@@ -99,16 +134,7 @@ class CarController(CarControllerBase):
         self.override_hold = OVERRIDE_HOLD_FRAMES
       lat_active = CC.latActive and not self.override_active
 
-      # Quiet-cancel grace: on disengage, hold ~2 s masking the camera's 0x1a->0x0a standby step
-      # on the 0x2AB re-TX (see create_acc_cluster_mk4) so the cluster sees one state transition,
-      # not the dual-beep pair. Re-engage clears it immediately.
-      if CC.enabled:
-        self.cancel_demote_frames = 0
-      elif self.enabled_prev:
-        self.cancel_demote_frames = 200  # ~2 s @100 Hz
-      else:
-        self.cancel_demote_frames = max(0, self.cancel_demote_frames - 1)
-      self.enabled_prev = CC.enabled
+      self.update_quiet_cancel(CC, CS.out.gasPressed)
     else:
       lat_active = CC.latActive and abs(CS.out.steeringTorque) < MAX_USER_TORQUE
 
@@ -241,10 +267,10 @@ class CarController(CarControllerBase):
         self.packer,
         self.CAN,
         hud_stock_values=CS.hud_stock_values,
-        steer_required=CC.latActive,
+        steer_required=self.hud_steer_required(CC, CS),
         is_mk4=self.is_mk4,
         hud_stock_raw=CS.hud_stock_raw if self.is_mk4 else None,
-        cancel_demote=self.is_mk4 and self.cancel_demote_frames > 0,
+        cancel_demote=self.is_mk4 and self.lkas_demote_frames > 0,
       ))
 
     # MK4 OP_CRUISE: re-TX camera ACC (0x2AB) onto main with openpilot set speed so the Haval

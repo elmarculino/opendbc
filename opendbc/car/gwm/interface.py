@@ -138,6 +138,10 @@ class CarInterface(CarInterfaceBase):
       # Angle-based steering: do NOT call configure_torque_tune — controlsd would
       # call update_live_torque_params on LatControlAngle which doesn't implement it.
       ret.steerControlType = SteerControlType.angle
+      # steerSaturated timer 0.4 -> 1.0 s: routes 107/109 fired "turn exceeds limit" 11/19x (23/49 s of
+      # promptRepeat) on sub-second EPS under-holds the driver can't act on; see latcontrol_angle's
+      # lat-accel threshold for the other half of the de-noise.
+      ret.steerLimitTimer = 1.0
       # 0.08 was at the extreme low end of opendbc (most cars 0.10–0.20; MK3 GWM is 0.30).
       # Route 00000003 showed steering oscillation (cmd hunting ±2–7°); raised toward the
       # common angle-car band so the planner does not over-correct a lagging EPS.
