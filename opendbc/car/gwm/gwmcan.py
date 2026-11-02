@@ -273,7 +273,7 @@ def create_buttons_command(packer, CAN: CanBus, counter, stock_msg, cancel_comma
 
 
 def create_hud_command(packer, CAN: CanBus, hud_stock_values, steer_required, is_mk4: bool, hud_stock_raw: bytes | None = None,
-                       cancel_demote: bool = False):
+                       lkas_standby: bool = False):
   # MK4: packer rebuild of LATERAL_STATE zeros most of the 64-byte camera frame (route 00000020:
   # bytes 8/15/16/17/23/… always differ). Cluster chrome likely needs that shell. Patch LKAS only.
   if is_mk4 and hud_stock_raw is not None and len(hud_stock_raw) >= 24:
@@ -281,9 +281,10 @@ def create_hud_command(packer, CAN: CanBus, hud_stock_values, steer_required, is
     if steer_required:
       # LKAS_STATE=5 packs as bits 3-5 of byte17 (0x28); keep other chrome bits from camera.
       b[17] = (b[17] & ~0x38) | 0x28
-    elif cancel_demote:
-      # Force LKAS nibble idle so the dash does not chime on full cancel (CC.enabled falling).
-      b[17] = b[17] & ~0x38
+    elif lkas_standby and (b[17] & 0x38) == 0:
+      # After a full disengage show LKAS_STATE 1 instead of the camera's idle 0: 5 -> 0 sets off the
+      # cluster take-over alarm (route 1b5). Camera-owned states (drift-out warnings) still pass through.
+      b[17] = (b[17] & ~0x38) | 0x08
     b[16] = checksum(bytes(b[17:24]), 0x66)
     return 0x23D, bytes(b), CAN.main
 
@@ -305,7 +306,8 @@ def create_hud_command(packer, CAN: CanBus, hud_stock_values, steer_required, is
     values["CRUISE_STATE"] = hud_stock_values["CRUISE_STATE"]
 
   values |= {
-    "LKAS_STATE": 5 if steer_required else (0 if cancel_demote else hud_stock_values["LKAS_STATE"]),
+    "LKAS_STATE": 5 if steer_required else (1 if lkas_standby and hud_stock_values["LKAS_STATE"] == 0
+                                            else hud_stock_values["LKAS_STATE"]),
   }
 
   data = packer.make_can_msg("LATERAL_STATE", 0, values)[1]
