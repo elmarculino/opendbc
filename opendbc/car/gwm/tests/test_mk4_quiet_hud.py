@@ -70,6 +70,13 @@ class TestMk4QuietCancel(unittest.TestCase):
     self._step(True, False, n=200)
     self.assertEqual(self.cc.cancel_demote_frames, 0)
 
+  def test_long_hold_does_not_bank_the_grace(self):
+    # a 60 s brake hold after UP must not leave a fresh 2 s grace for whatever the camera sends next
+    self._step(True, True, n=5)
+    self._step(False, False, cam_deactivated=True, n=6000)
+    self._step(False, False)  # brake released
+    self.assertEqual(self.cc.cancel_demote_frames, 0)
+
   def test_mask_holds_after_stalk_up_with_brake(self):
     self._step(True, True, n=5)
     self._step(False, False, cam_deactivated=True, n=500)

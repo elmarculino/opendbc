@@ -92,11 +92,12 @@ class CarController(CarControllerBase):
       self.cancel_demote_frames = 200  # ~2 s @100 Hz
     elif camera_deactivated and (CC.enabled or self.cancel_demote_frames > 0):
       # The camera holds CRUISE_STATE_2=1 (0x0a, "deactivated") for as long as the brake stays down, not
-      # ~0.1 s, and the cluster sounds its loud take-over alarm (1 Hz double beep) whenever it is shown
-      # 0x0a -- route 1b5 (cabin mic): silent while 0x12 was masked, alarm 0.2 s after the 2 s grace ran
-      # out with the pedal still down, alarm stopped at brake release. So hold the mask until the camera
-      # leaves 0x0a itself, and also while lateral stays engaged (a brake in lat-only would leak it).
-      self.cancel_demote_frames = max(self.cancel_demote_frames, 1)
+      # ~0.1 s, and right after a session the cluster sounds its loud take-over alarm (1 Hz double beep)
+      # when it is shown 0x0a (off-state toggles with no recent session are silent) -- route 1b5 (cabin
+      # mic): silent while 0x12 was masked, alarm 0.2 s after the 2 s grace ran out with the pedal still
+      # down, alarm stopped at brake release. So hold the mask until the camera leaves 0x0a itself, and
+      # also while lateral stays engaged (a brake in lat-only would leak it).
+      self.cancel_demote_frames = max(self.cancel_demote_frames - 1, 1)
     else:
       self.cancel_demote_frames = max(0, self.cancel_demote_frames - 1)
     # LKAS standby is tied to the full disengage: MADS keeps lateral (and its HUD) through a brake.
