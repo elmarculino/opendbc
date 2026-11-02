@@ -3,7 +3,7 @@ from opendbc.can.parser import CANParser
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.gwm.values import DBC, CAR
-from opendbc.car.gwm.mk4_stalk import update_mk4_down_gestures
+from opendbc.car.gwm.mk4_stalk import mk4_stalk_cancel, update_mk4_down_gestures
 import copy
 
 GearShifter = structs.CarState.GearShifter
@@ -182,6 +182,7 @@ class CarState(CarStateBase):
 
     cancel = bool(cp.vl["STEER_AND_AP_STALK"]["AP_CANCEL_COMMAND"])
     if self.CP.carFingerprint == CAR.GWM_HAVAL_H6_MK4:
+      cancel = mk4_stalk_cancel(cancel, bool(cp.vl["GEAR_STALK"]["STALK_UP"]))
       # Only stalk/button cancel drops main_on. Brake already cancels *enabled* via selfdrived
       # pedalPressed; clearing available on every brake flooded wrongCarMode for most of route
       # 00000016 (~11k events) and forced a re-arm before re-engage.

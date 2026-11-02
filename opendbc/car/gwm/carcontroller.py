@@ -78,7 +78,7 @@ class CarController(CarControllerBase):
     self.enabled_prev = False        # MK4: falling-edge detect for the quiet-cancel grace
     self.long_active_prev = False    # MK4: falling-edge detect for the MADS brake-cancel grace
     self.cancel_demote_frames = 0    # MK4: frames left masking the camera's 0x0a standby step post-cancel (0x2AB)
-    self.lkas_standby = False        # MK4: show LKAS_STATE 1 (not 0) after a full disengage (0x23D)
+    self.lkas_standby_frames = 0     # MK4: frames left showing LKAS_STATE 1 (not 0) after a full disengage (0x23D)
 
   def update_quiet_cancel(self, CC, gas_pressed: bool, camera_deactivated: bool = False):
     # Quiet-cancel grace: on disengage, mask the camera's 0x1a->0x0a step on the 0x2AB re-TX (see
@@ -102,12 +102,15 @@ class CarController(CarControllerBase):
       self.cancel_demote_frames = max(0, self.cancel_demote_frames - 1)
     # LKAS standby is tied to the full disengage: MADS keeps lateral (and its HUD) through a brake.
     # Route 1b5: dropping LKAS_STATE 5 -> 0 on stalk UP set off the same alarm ~0.4 s later (the
-    # steering request alone drops silently on every driver override). Show 1 instead and hold it
-    # until the next engage, so the cluster never sees an active -> off step while driving.
+    # steering request alone drops silently on every driver override); 5 -> 1 was silent on route 1b9.
+    # But the cluster draws 1 as a red lane-keeping icon, so only bridge with it for ~2 s, then fall back
+    # to the camera's idle 0.
     if CC.enabled:
-      self.lkas_standby = False
+      self.lkas_standby_frames = 0
     elif self.enabled_prev:
-      self.lkas_standby = True
+      self.lkas_standby_frames = 200  # ~2 s @100 Hz
+    else:
+      self.lkas_standby_frames = max(0, self.lkas_standby_frames - 1)
     self.enabled_prev = CC.enabled
     self.long_active_prev = CC.longActive
 
@@ -279,7 +282,7 @@ class CarController(CarControllerBase):
         steer_required=self.hud_steer_required(CC, CS),
         is_mk4=self.is_mk4,
         hud_stock_raw=CS.hud_stock_raw if self.is_mk4 else None,
-        lkas_standby=self.is_mk4 and self.lkas_standby,
+        lkas_standby=self.is_mk4 and self.lkas_standby_frames > 0,
       ))
 
     # MK4 OP_CRUISE: re-TX camera ACC (0x2AB) onto main with openpilot set speed so the Haval

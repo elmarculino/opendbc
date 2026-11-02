@@ -21,7 +21,7 @@ class TestMk4QuietCancel(unittest.TestCase):
     self.cc.enabled_prev = False
     self.cc.long_active_prev = False
     self.cc.cancel_demote_frames = 0
-    self.cc.lkas_standby = False
+    self.cc.lkas_standby_frames = 0
 
   def _step(self, enabled, long_active, gas=False, n=1, cam_deactivated=False):
     for _ in range(n):
@@ -31,7 +31,7 @@ class TestMk4QuietCancel(unittest.TestCase):
     self._step(True, True, n=5)
     self._step(True, False)  # brake: MADS keeps lateral, only ACC drops
     self.assertGreater(self.cc.cancel_demote_frames, 0)
-    self.assertFalse(self.cc.lkas_standby)
+    self.assertEqual(self.cc.lkas_standby_frames, 0)
 
   def test_gas_override_does_not_arm(self):
     self._step(True, True, n=5)
@@ -42,13 +42,13 @@ class TestMk4QuietCancel(unittest.TestCase):
     self._step(True, True, n=5)
     self._step(False, False)
     self.assertGreater(self.cc.cancel_demote_frames, 0)
-    self.assertTrue(self.cc.lkas_standby)
+    self.assertGreater(self.cc.lkas_standby_frames, 0)
 
   def test_full_disengage_from_lat_only_arms_both(self):
     self._step(True, False, n=5)
     self._step(False, False)
     self.assertGreater(self.cc.cancel_demote_frames, 0)
-    self.assertTrue(self.cc.lkas_standby)
+    self.assertGreater(self.cc.lkas_standby_frames, 0)
 
   def test_demote_expires_and_resume_clears(self):
     self._step(True, True, n=5)
@@ -92,13 +92,19 @@ class TestMk4QuietCancel(unittest.TestCase):
     self._step(False, False, cam_deactivated=True, n=10)
     self.assertEqual(self.cc.cancel_demote_frames, 0)
 
-  def test_lkas_standby_holds_until_next_engage(self):
+  def test_lkas_standby_is_a_short_bridge(self):
+    # route 1b9: the cluster draws LKAS_STATE 1 as a red lane icon, so it must not stay up after UP
     self._step(True, False, n=5)
-    self._step(False, False, n=5000)
-    self.assertTrue(self.cc.lkas_standby)
-    self._step(True, False)
-    self.assertFalse(self.cc.lkas_standby)
+    self._step(False, False, n=199)
+    self.assertGreater(self.cc.lkas_standby_frames, 0)
+    self._step(False, False, n=2)
+    self.assertEqual(self.cc.lkas_standby_frames, 0)
 
+  def test_lkas_standby_clears_on_engage(self):
+    self._step(True, False, n=5)
+    self._step(False, False, n=50)
+    self._step(True, False)
+    self.assertEqual(self.cc.lkas_standby_frames, 0)
 
 def _raw(b17=0x02, b18=0x1a):
   b = bytearray(64)

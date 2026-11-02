@@ -18,3 +18,13 @@ def update_mk4_down_gestures(*, enable_gesture: bool, further: bool, gear_d: boo
     gesture_fired = True
   lkas = int(prev_enable_gesture and not enable_gesture and engage_latch and not gesture_fired)
   return engage, lkas, engage_latch, gesture_fired
+
+
+def mk4_stalk_cancel(ap_cancel: bool, stalk_up: bool) -> bool:
+  """Any stalk UP turns everything off.
+
+  The column module sends AP_CANCEL only when the lever reaches the UP detent. A lighter tap only sets
+  GEAR_STALK.STALK_UP, which left openpilot engaged (route 1b9 @732 s): "UP turns off" must not depend
+  on how far the lever went.
+  """
+  return ap_cancel or stalk_up

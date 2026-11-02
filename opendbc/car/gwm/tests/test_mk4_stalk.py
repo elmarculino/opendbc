@@ -1,6 +1,6 @@
 import unittest
 
-from opendbc.car.gwm.mk4_stalk import update_mk4_down_gestures
+from opendbc.car.gwm.mk4_stalk import mk4_stalk_cancel, update_mk4_down_gestures
 
 
 def _step(enable, further, *, gear_d=True, v_ego=10.0, prev_enable=False, latch=False, fired=False, prev_engage=0):
@@ -82,6 +82,15 @@ class TestMk4Stalk(unittest.TestCase):
     # ...but a fresh press under those same conditions latches nothing
     _, _, latch, _ = _step(True, True, gear_d=False, v_ego=0.0)
     self.assertFalse(latch)
+
+
+class TestMk4StalkCancel(unittest.TestCase):
+  def test_any_up_cancels(self):
+    # route 1b9 @732 s: a light UP tap set only GEAR_STALK.STALK_UP and openpilot stayed engaged
+    self.assertTrue(mk4_stalk_cancel(ap_cancel=False, stalk_up=True))
+    self.assertTrue(mk4_stalk_cancel(ap_cancel=True, stalk_up=True))
+    self.assertTrue(mk4_stalk_cancel(ap_cancel=True, stalk_up=False))
+    self.assertFalse(mk4_stalk_cancel(ap_cancel=False, stalk_up=False))
 
 
 class TestMk4ButtonEnable(unittest.TestCase):
