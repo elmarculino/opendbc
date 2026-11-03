@@ -318,7 +318,7 @@ def create_hud_command(packer, CAN: CanBus, hud_stock_values, steer_required, is
 
 def create_acc_cluster_mk4(CAN: CanBus, acc_stock_raw: bytes, set_speed_kph: float | None = None,
                           follow_dashes: int | None = None, cruise_active: bool = False,
-                          cancel_demote: bool = False):
+                          cancel_demote: bool = False, hide_exit_chime: bool = False):
   """Re-TX camera ACC (0x2AB) onto the main bus with openpilot's set speed for the OEM cluster.
 
   Under OP_CRUISE the stock camera freezes ACC_SPEED_SELECTION, so the Haval dash never tracks
@@ -364,6 +364,9 @@ def create_acc_cluster_mk4(CAN: CanBus, acc_stock_raw: bytes, set_speed_kph: flo
     # (52bcb3fc) never reached the wire: it only patched while CC.enabled, which had already
     # dropped at cancel time.
     b[18] = (b[18] & ~0x3F) | 0x12
+  if hide_exit_chime and not cruise_active:
+    # b17 0x04 = camera's "ACC exited" notice; the cluster chimes on it (see CarController.update_quiet_cancel)
+    b[17] &= ~0x04
   b[16] = checksum(bytes(b[17:24]), 0x40)
   return 0x2AB, bytes(b), CAN.main
 

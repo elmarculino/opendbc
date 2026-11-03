@@ -79,8 +79,10 @@ class CarController(CarControllerBase):
     self.long_active_prev = False    # MK4: falling-edge detect for the MADS brake-cancel grace
     self.cancel_demote_frames = 0    # MK4: frames left masking the camera's 0x0a standby step post-cancel (0x2AB)
     self.lkas_standby_frames = 0     # MK4: frames left showing LKAS_STATE 1 (not 0) after a full disengage (0x23D)
+    self.exit_chime_frames = 0       # MK4: frames left hiding the camera's ACC-exit chime flag (0x2AB b17 0x04)
+    self.exit_flag_seen = False
 
-  def update_quiet_cancel(self, CC, gas_pressed: bool, camera_deactivated: bool = False):
+  def update_quiet_cancel(self, CC, gas_pressed: bool, camera_deactivated: bool = False, camera_exit_flag: bool = False):
     # Quiet-cancel grace: on disengage, mask the camera's 0x1a->0x0a step on the 0x2AB re-TX (see
     # create_acc_cluster_mk4) and land on 0x12 ("available"). Re-engage clears it immediately.
     # MADS: a brake drops only longActive (enabled stays True for lateral), so the ACC grace must also
@@ -111,6 +113,21 @@ class CarController(CarControllerBase):
       self.lkas_standby_frames = 200  # ~2 s @100 Hz
     else:
       self.lkas_standby_frames = max(0, self.lkas_standby_frames - 1)
+    # OEM "ACC exited" chime: on every ACC exit the camera sets 0x2AB b17 0x04 until ~0.5-2 s after the
+    # brake is released, and the cluster double-beeps on it ~0.3 s after release unless the blinker is on.
+    # Routes 1b5/1b9/1bb/1bc: 0x04 on all 12 ACC-exit brakes; chime on all but the blinker-held one and
+    # one where 0x04 cleared during a standstill before release. Lateral-only brakes never set it and
+    # are silent. The exit is the driver's own gesture and openpilot's UI already shows it, so hide the
+    # flag from the cluster until the camera clears it (30 s cap). Forced disengages still alert via openpilot.
+    if CC.longActive:
+      self.exit_chime_frames = 0
+    elif (self.enabled_prev and not CC.enabled) or (self.long_active_prev and not gas_pressed):
+      self.exit_chime_frames = 3000  # 30 s cap @100 Hz
+      self.exit_flag_seen = camera_exit_flag
+    elif self.exit_chime_frames > 0:
+      if camera_exit_flag:
+        self.exit_flag_seen = True
+      self.exit_chime_frames = 0 if (self.exit_flag_seen and not camera_exit_flag) else self.exit_chime_frames - 1
     self.enabled_prev = CC.enabled
     self.long_active_prev = CC.longActive
 
@@ -146,7 +163,8 @@ class CarController(CarControllerBase):
       lat_active = CC.latActive and not self.override_active
 
       camera_deactivated = CS.acc_stock_raw is not None and (CS.acc_stock_raw[18] & 0x38) == 0x08
-      self.update_quiet_cancel(CC, CS.out.gasPressed, camera_deactivated)
+      camera_exit_flag = CS.acc_stock_raw is not None and bool(CS.acc_stock_raw[17] & 0x04)
+      self.update_quiet_cancel(CC, CS.out.gasPressed, camera_deactivated, camera_exit_flag)
     else:
       lat_active = CC.latActive and abs(CS.out.steeringTorque) < MAX_USER_TORQUE
 
@@ -324,6 +342,7 @@ class CarController(CarControllerBase):
           follow_dashes=follow,
           cruise_active=cruise_active,
           cancel_demote=self.cancel_demote_frames > 0,
+          hide_exit_chime=self.exit_chime_frames > 0,
         ))
 
     new_actuators = actuators.as_builder()

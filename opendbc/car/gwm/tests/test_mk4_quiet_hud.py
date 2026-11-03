@@ -22,10 +22,46 @@ class TestMk4QuietCancel(unittest.TestCase):
     self.cc.long_active_prev = False
     self.cc.cancel_demote_frames = 0
     self.cc.lkas_standby_frames = 0
+    self.cc.exit_chime_frames = 0
+    self.cc.exit_flag_seen = False
 
-  def _step(self, enabled, long_active, gas=False, n=1, cam_deactivated=False):
+  def _step(self, enabled, long_active, gas=False, n=1, cam_deactivated=False, exit_flag=False):
     for _ in range(n):
-      self.cc.update_quiet_cancel(_cc(enabled, long_active), gas, cam_deactivated)
+      self.cc.update_quiet_cancel(_cc(enabled, long_active), gas, cam_deactivated, exit_flag)
+
+  def test_exit_chime_hidden_until_camera_clears_it(self):
+    # route 1bc: brake drops ACC, camera raises b17 0x04 ~0.2 s later and drops it ~0.5-2 s after release
+    self._step(True, True, n=5)
+    self._step(True, False)
+    self._step(True, False, n=20)
+    self.assertGreater(self.cc.exit_chime_frames, 0)
+    self._step(True, False, exit_flag=True, n=400)
+    self.assertGreater(self.cc.exit_chime_frames, 0)
+    self._step(True, False)
+    self.assertEqual(self.cc.exit_chime_frames, 0)
+
+  def test_exit_chime_after_stalk_up(self):
+    self._step(True, True, n=5)
+    self._step(False, False, exit_flag=True, n=100)
+    self.assertGreater(self.cc.exit_chime_frames, 0)
+
+  def test_exit_chime_mask_is_capped(self):
+    self._step(True, True, n=5)
+    self._step(True, False, exit_flag=True, n=3001)
+    self.assertEqual(self.cc.exit_chime_frames, 0)
+
+  def test_exit_chime_clears_on_resume_and_skips_gas(self):
+    self._step(True, True, n=5)
+    self._step(True, False, exit_flag=True, n=5)
+    self._step(True, True)
+    self.assertEqual(self.cc.exit_chime_frames, 0)
+    self._step(True, False, gas=True, exit_flag=True, n=5)
+    self.assertEqual(self.cc.exit_chime_frames, 0)
+
+  def test_lat_only_brake_does_not_arm_exit_chime(self):
+    self._step(True, False, n=300)
+    self._step(True, False, exit_flag=True, n=5)
+    self.assertEqual(self.cc.exit_chime_frames, 0)
 
   def test_mads_brake_arms_acc_demote_only(self):
     self._step(True, True, n=5)
@@ -133,6 +169,13 @@ class TestMk4ClusterFrames(unittest.TestCase):
     self.assertEqual(out[18], 0x12)
     self.assertEqual(out[16], gwmcan.checksum(out[17:24], 0x40))
     self.assertEqual(gwmcan.create_acc_cluster_mk4(self.CAN, _raw(b18=0x0a))[1][18], 0x0a)
+
+  def test_exit_chime_flag_hidden(self):
+    raw = _raw(b17=0x84, b18=0x0a)
+    out = gwmcan.create_acc_cluster_mk4(self.CAN, raw, cancel_demote=True, hide_exit_chime=True)[1]
+    self.assertEqual(out[17], 0x80)
+    self.assertEqual(out[16], gwmcan.checksum(out[17:24], 0x40))
+    self.assertEqual(gwmcan.create_acc_cluster_mk4(self.CAN, raw)[1][17], 0x84)
 
 
 class TestMk4HudLkas(unittest.TestCase):
