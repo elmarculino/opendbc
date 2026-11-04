@@ -19,6 +19,12 @@ class CanBus(CanBusBase):
     return self.offset + 2
 
 
+def next_counter(counter) -> int:
+  """GWM counters run 0-14 (the stock ECUs never send 15; upstream commaai/opendbc#3841 found the same on MK3).
+  Routes 1b5/1bc: our MK4 STEER_CMD sent 15 on ~6.5% of frames with % 16."""
+  return (int(counter) + 1) % 15
+
+
 def create_steer_command_angle(packer, CAN: CanBus, camera_stock_values, apply_angle: float, lat_active: bool):
   """MK4: STEER_CMD with 14-bit STEER_REQUEST angle and two independent CRCs.
 
@@ -38,7 +44,7 @@ def create_steer_command_angle(packer, CAN: CanBus, camera_stock_values, apply_a
   # rejects (it never grants authority, A_RX_STEER_REQUESTED stays != 1, wheel never moves).
   # Just clip to the representable physical range and let the packer build the 14-bit raw.
   steer_request = float(np.clip(apply_angle, -779.6, 16383 * 0.1 - 779.6))
-  new_counter = (int(camera_stock_values["COUNTER_1"]) + 1) % 16
+  new_counter = next_counter(camera_stock_values["COUNTER_1"])
 
   if lat_active:
     angle_enable = 0x3F  # EPS executes the angle command
