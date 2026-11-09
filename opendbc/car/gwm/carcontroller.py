@@ -42,6 +42,8 @@ OVERRIDE_FRAMES = 10           # ~100 ms @100 Hz
 OVERRIDE_HOLD_FRAMES = 100
 # MK4 HUD: below this speed controlsd drops latActive (standstill), but the LKAS icon stays on while engaged.
 MK4_HUD_STANDSTILL_SPEED = 0.5  # m/s (controlsd standstill gate is 0.3)
+# Cluster follow dashes from the driving personality (True) or the camera's own (False, ICC icon test).
+MK4_CLUSTER_PERSONALITY_DASHES = False
 
 
 # MK4 regen-lead: BRAKE_GAS_STATE (regen enable) uses a light accel hysteresis so cruise chatter around
@@ -157,13 +159,16 @@ class CarController(CarControllerBase):
         self.acc_cluster_set_kph = set_kph
       # Follow dashes: map personality 1..3 -> OEM 1..4; only update latch on change.
       # Default to 3 if HUD has not published bars yet — OEM dist 0 = "disabled" (no ICC icon).
-      if hud.leadDistanceBars > 0:
-        new_follow = 4 if hud.leadDistanceBars >= 3 else int(hud.leadDistanceBars)
-        if self.acc_cluster_follow is None or new_follow != self.acc_cluster_follow:
-          self.acc_cluster_follow = new_follow
-      if self.acc_cluster_follow is None:
-        self.acc_cluster_follow = 3
-      follow = self.acc_cluster_follow
+      # Test (routes 1c8/1c9): the cluster drew the ICC icon only on camera frames with 2-3 dashes and never
+      # on ours, which always had 1 (personality 1 bar). Keep the camera's own dashes while engaged.
+      if MK4_CLUSTER_PERSONALITY_DASHES:
+        if hud.leadDistanceBars > 0:
+          new_follow = 4 if hud.leadDistanceBars >= 3 else int(hud.leadDistanceBars)
+          if self.acc_cluster_follow is None or new_follow != self.acc_cluster_follow:
+            self.acc_cluster_follow = new_follow
+        if self.acc_cluster_follow is None:
+          self.acc_cluster_follow = 3
+        follow = self.acc_cluster_follow
     else:
       self.acc_cluster_set_kph = None
       self.acc_cluster_follow = None

@@ -52,6 +52,11 @@ class TestMk4AccCluster(unittest.TestCase):
     self.assertEqual(out[22], 100)
     self.assertNotEqual(out[21] & 0x07, 0)
 
+  def test_engaged_keeps_the_camera_dashes(self):
+    # routes 1c8/1c9: the icon showed only with the camera's 2-3 dashes, never with our personality 1
+    out = self._step(True, True, n=5)  # personality 1 bar, camera 2 dashes
+    self.assertEqual(out[21], 0x22)
+
   def test_gas_override_keeps_icc_and_set_speed(self):
     self._step(True, True, n=5)
     for _ in range(50):
