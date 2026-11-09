@@ -81,6 +81,7 @@ class CarController(CarControllerBase):
     self.lkas_standby_frames = 0     # MK4: frames left showing LKAS_STATE 1 (not 0) after a full disengage (0x23D)
     self.exit_chime_frames = 0       # MK4: frames left hiding the camera's ACC-exit chime flag (0x2AB b17 0x04)
     self.exit_flag_seen = False
+    self.acc_gas_override = False    # MK4: gas pressed while ACC was engaged (cluster keeps showing ICC on)
 
   def update_quiet_cancel(self, CC, gas_pressed: bool, camera_deactivated: bool = False, camera_exit_flag: bool = False):
     # Quiet-cancel grace: on disengage, mask the camera's 0x1a->0x0a step on the 0x2AB re-TX (see
@@ -128,8 +129,53 @@ class CarController(CarControllerBase):
       if camera_exit_flag:
         self.exit_flag_seen = True
       self.exit_chime_frames = 0 if (self.exit_flag_seen and not camera_exit_flag) else self.exit_chime_frames - 1
+    # Gas override: longActive drops only while the pedal is down, ACC stays engaged. Route 1c8: passing
+    # the camera through here showed 0x12/0x2a, so the ICC icon and Vmax went out while ACC was on.
+    if not CC.enabled or not gas_pressed:
+      self.acc_gas_override = False
+    elif CC.longActive or self.long_active_prev:
+      self.acc_gas_override = True
     self.enabled_prev = CC.enabled
     self.long_active_prev = CC.longActive
+
+  def acc_cluster_args(self, CC, v_ego: float) -> dict:
+    """Arguments for create_acc_cluster_mk4: ICC on (set speed + dashes) while ACC is engaged, gas
+    override included; otherwise hide the ICC icon instead of the camera's stale 'available' set speed."""
+    hud = CC.hudControl
+    set_kph = None
+    follow = None
+    cruise_active = bool(CC.longActive or self.acc_gas_override)
+    if cruise_active:
+      raw = float(hud.setSpeed) * CV.MS_TO_KPH if hud.speedVisible else 0.0
+      if 0.0 < raw < 200.0:
+        self.acc_cluster_set_kph = raw
+      # Hold last good set while engaged even if one frame publishes 255/unset
+      set_kph = self.acc_cluster_set_kph
+      if set_kph is None and v_ego > 0.5:
+        # First-engage race before VCruiseHelper init: show vEgo floor 20 like cruise.py
+        set_kph = float(np.clip(v_ego * CV.MS_TO_KPH, 20.0, 145.0))
+        self.acc_cluster_set_kph = set_kph
+      # Follow dashes: map personality 1..3 -> OEM 1..4; only update latch on change.
+      # Default to 3 if HUD has not published bars yet — OEM dist 0 = "disabled" (no ICC icon).
+      if hud.leadDistanceBars > 0:
+        new_follow = 4 if hud.leadDistanceBars >= 3 else int(hud.leadDistanceBars)
+        if self.acc_cluster_follow is None or new_follow != self.acc_cluster_follow:
+          self.acc_cluster_follow = new_follow
+      if self.acc_cluster_follow is None:
+        self.acc_cluster_follow = 3
+      follow = self.acc_cluster_follow
+    else:
+      self.acc_cluster_set_kph = None
+      self.acc_cluster_follow = None
+    return dict(
+      set_speed_kph=set_kph,
+      follow_dashes=follow,
+      cruise_active=cruise_active,
+      cancel_demote=self.cancel_demote_frames > 0,
+      hide_exit_chime=self.exit_chime_frames > 0,
+      # Also during the quiet-cancel grace, so a cancel is one cluster change (0x1a -> 0x12 without dashes).
+      hide_icc=not cruise_active,
+    )
 
   def hud_steer_required(self, CC, CS) -> bool:
     # MK4: latActive drops at standstill (steerAtStandstill=False) while lateral stays engaged, which
@@ -310,40 +356,7 @@ class CarController(CarControllerBase):
     # frozen camera state + thrashing distance on every personality tick).
     if self.frame % 10 == 0:  # 10 Hz
       if self.is_mk4 and self.CP.openpilotLongitudinalControl and CS.acc_stock_raw is not None:
-        hud = CC.hudControl
-        set_kph = None
-        follow = None
-        cruise_active = bool(CC.longActive)
-        if CC.longActive:
-          raw = float(hud.setSpeed) * CV.MS_TO_KPH if hud.speedVisible else 0.0
-          if 0.0 < raw < 200.0:
-            self.acc_cluster_set_kph = raw
-          # Hold last good set while engaged even if one frame publishes 255/unset
-          set_kph = self.acc_cluster_set_kph
-          if set_kph is None and CS.out.vEgo > 0.5:
-            # First-engage race before VCruiseHelper init: show vEgo floor 20 like cruise.py
-            set_kph = float(np.clip(CS.out.vEgo * CV.MS_TO_KPH, 20.0, 145.0))
-            self.acc_cluster_set_kph = set_kph
-          # Follow dashes: map personality 1..3 -> OEM 1..4; only update latch on change.
-          # Default to 3 if HUD has not published bars yet — OEM dist 0 = "disabled" (no ICC icon).
-          if hud.leadDistanceBars > 0:
-            new_follow = 4 if hud.leadDistanceBars >= 3 else int(hud.leadDistanceBars)
-            if self.acc_cluster_follow is None or new_follow != self.acc_cluster_follow:
-              self.acc_cluster_follow = new_follow
-          if self.acc_cluster_follow is None:
-            self.acc_cluster_follow = 3
-          follow = self.acc_cluster_follow
-        else:
-          self.acc_cluster_set_kph = None
-          self.acc_cluster_follow = None
-        can_sends.append(gwmcan.create_acc_cluster_mk4(
-          self.CAN, CS.acc_stock_raw,
-          set_speed_kph=set_kph,
-          follow_dashes=follow,
-          cruise_active=cruise_active,
-          cancel_demote=self.cancel_demote_frames > 0,
-          hide_exit_chime=self.exit_chime_frames > 0,
-        ))
+        can_sends.append(gwmcan.create_acc_cluster_mk4(self.CAN, CS.acc_stock_raw, **self.acc_cluster_args(CC, CS.out.vEgo)))
 
     new_actuators = actuators.as_builder()
     if self.CP.steerControlType == SteerControlType.angle:
