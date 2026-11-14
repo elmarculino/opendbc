@@ -57,6 +57,16 @@ MK4_CLUSTER_PERSONALITY_DASHES = False
 MK4_REGEN_ON_MS2 = -0.08
 MK4_REGEN_OFF_MS2 = 0.05
 
+# MK4 gas/brake anti-dither (route 1d4: 405 REQ 12<->13 flips in 10 min engaged, every 0.1-0.4 s while
+# holding set speed on +/-0.01 m/s^2 planner noise; each flip jolted the car +/-0.2-0.3 m/s^2).
+# Asymmetric so no frame is new to the OEM ACC: from gas mode, enter brake mode only at a real decel
+# request (<= MK4_BRAKE_ON_MS2, same as regen-on); leave it as soon as accel >= 0, exactly as before.
+# In between the frame is gas mode with GAS_CMD 0, the frame we already send at accel == 0. Never a
+# brake request held at the -41 brake-off baseline (the 13e-146 fault). Below MK4_BRAKE_HYST_MIN_SPEED
+# and while stopping, plain sign(accel) as before so stops and standstill hold are unchanged.
+MK4_BRAKE_ON_MS2 = MK4_REGEN_ON_MS2
+MK4_BRAKE_HYST_MIN_SPEED = 5.0  # m/s
+
 
 class CarController(CarControllerBase):
   def __init__(self, dbc_names, CP):
@@ -73,6 +83,7 @@ class CarController(CarControllerBase):
     self.override_counter = 0
     self.override_hold = 0         # MK4: frames remaining in the post-override OEM-style hold-off
     self.regen_brake = False       # MK4: hysteretic REGEN state latch (BRAKE_GAS_STATE only; see MK4_REGEN_*)
+    self.brake_mode = False        # MK4: last BRAKE_OR_GAS_REQ was brake (anti-dither; see MK4_BRAKE_*)
     # OEM cluster (0x2AB): latch last good set-speed + follow dashes so the Vmax icon stays solid
     # while engaged (OEM: icon always on when ACC active). Avoid thrashing distance every frame.
     self.acc_cluster_set_kph: float | None = None
@@ -181,6 +192,14 @@ class CarController(CarControllerBase):
       # Also during the quiet-cancel grace, so a cancel is one cluster change (0x1a -> 0x12 without dashes).
       hide_icc=not cruise_active,
     )
+
+  def long_braking(self, accel: float, long_active: bool, stopping: bool, v_ego: float) -> bool:
+    """MK4 BRAKE_OR_GAS_REQ decision (True = brake mode) with the asymmetric anti-dither, see MK4_BRAKE_*."""
+    braking = accel < 0
+    if long_active and not stopping and v_ego > MK4_BRAKE_HYST_MIN_SPEED and not self.brake_mode:
+      braking = accel <= MK4_BRAKE_ON_MS2
+    self.brake_mode = braking and long_active
+    return braking
 
   def hud_steer_required(self, CC, CS) -> bool:
     # MK4: latActive drops at standstill (steerAtStandstill=False) while lateral stays engaged, which
@@ -319,10 +338,11 @@ class CarController(CarControllerBase):
           accel = - abs(self.accel / CarControllerParams.ACCEL_MIN)
         else:
           accel = self.accel / CarControllerParams.ACCEL_MAX
-        # braking (BRAKE_OR_GAS_REQ / cmds): plain sign of accel every frame.
+        # braking (BRAKE_OR_GAS_REQ / cmds): sign of accel; MK4 adds the anti-dither entry threshold.
         # regen_brake (BRAKE_GAS_STATE only): light hysteresis — see MK4_REGEN_* above.
         braking = self.accel < 0
         if self.is_mk4:
+          braking = self.long_braking(self.accel, CC.longActive, standstill, CS.out.vEgo)
           if not CC.longActive:
             self.regen_brake = False
           elif self.accel <= MK4_REGEN_ON_MS2:
