@@ -75,7 +75,7 @@ Distance:   wheel follow buttons → gapAdjustCruise → openpilot personality (
   - `ACC_SPEED_SELECTION` = openpilot set-speed (latched while engaged).
   - While OP enabled, force **stock activated chrome** on the frame (not only the state nibble):
     - `b18 = 0x1a` (CRUISE_STATE_2=activated **plus** constant `0x02` seen on every OEM eng frame)
-    - `b21` low 3 bits = follow dashes **1..4** (never 0 = OEM “disabled” / no ICC)
+    - `b21` low 3 bits = follow-distance wire value **1..4**; the cluster shows only **3 dashes** (never 0 = OEM “disabled” / no ICC)
     - `b21 |= 0x20` (bit set on all stock ACC-UI frames)
     - `b17 |= 0x80` (common on stock activated frames for Vmax chrome)
   - Follow dashes latched from personality; default **3** if HUD bars not ready yet.

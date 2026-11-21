@@ -101,8 +101,9 @@ class CarInterface(CarInterfaceBase):
 
     ret.steerFaultTemporary |= self.steer_fault_temporary_counter > 100
 
-    # Driving personality mirrors the OEM follow-distance dash (MK3 and MK4). The stock ACC has 4 distances, openpilot
-    # 3 personalities (distances 3 and 4 both map to the farthest). While they disagree, pulse gap-adjust
+    # Driving personality mirrors the OEM follow-distance dash (MK3 and MK4). The MK4 cluster shows only 3 dashes, like
+    # openpilot's 3 personalities, but the camera's CAR_DISTANCE_SELECTION takes 1..4 on the wire (wire->cluster mapping
+    # unconfirmed; wire 3 and 4 both map to the farthest here). While they disagree, pulse gap-adjust
     # press/release pairs (openpilot cycles on release), rate-limited so leadDistanceBars can catch up.
     # MK4: the wheel distance buttons move the camera's dash up/down (routes 1d4/1e6, also while engaged), but
     # openpilot only cycles one way on any press, so the cluster dashes and the personality drifted apart (1e8).
@@ -116,7 +117,7 @@ class CarInterface(CarInterfaceBase):
 
   def personality_sync_events(self) -> list:
     """One gap-adjust press/release pair at a time while the personality (leadDistanceBars) differs from the
-    OEM dash (1..4, 4 folded to 3); see update()."""
+    OEM wire dash (1..4, 4 folded to 3; the MK4 cluster shows 3 dashes); see update()."""
     prev_gac_button = self.press_gac_button
     if self.press_gac_button:
       self.press_gac_button = False    # always complete the press with a release

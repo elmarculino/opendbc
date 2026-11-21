@@ -174,7 +174,7 @@ class CarController(CarControllerBase):
         # First-engage race before VCruiseHelper init: show vEgo floor 20 like cruise.py
         set_kph = float(np.clip(v_ego * CV.MS_TO_KPH, 20.0, 145.0))
         self.acc_cluster_set_kph = set_kph
-      # Follow dashes: map personality 1..3 -> OEM 1..4; only update latch on change.
+      # Follow dashes: map personality 1..3 -> OEM wire 1..4 (the cluster shows only 3 dashes); only update latch on change.
       # Default to 3 if HUD has not published bars yet — OEM dist 0 = "disabled" (no ICC icon).
       # Test (routes 1c8/1c9): the cluster drew the ICC icon only on camera frames with 2-3 dashes and never
       # on ours, which always had 1 (personality 1 bar). Keep the camera's own dashes while engaged.

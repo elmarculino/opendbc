@@ -332,7 +332,7 @@ def create_acc_cluster_mk4(CAN: CanBus, acc_stock_raw: bytes, set_speed_kph: flo
   openpilot's VCruiseHelper. We block the camera's 0x2AB from being forwarded (panda check_relay)
   and re-transmit the latest camera frame with:
     byte22 = ACC_SPEED_SELECTION (kph, factor 1)
-    byte21 low 3 bits = CAR_DISTANCE_SELECTION (1..4 follow dashes; 0 = disabled / no ICC)
+    byte21 low 3 bits = CAR_DISTANCE_SELECTION (wire 1..4; the cluster shows only 3 dashes; 0 = disabled / no ICC)
     byte18 CRUISE_STATE_2 + chrome bits when cruise_active
     byte16 = CRC1 = crc8(bytes[17:24], xor=0x40)  — verified 600/600 frames, route 00000008
 
