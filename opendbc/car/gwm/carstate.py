@@ -62,8 +62,6 @@ class CarState(CarStateBase):
     self.prev_raw_speed_down = 0
     self.scroll_up_hold = 0
     self.scroll_down_hold = 0
-    self.prev_dist_up = 0
-    self.prev_dist_down = 0
     self.prev_cancel = 0
     self.prev_drive_mode = -1
     self.prev_lkas = 0
@@ -215,7 +213,7 @@ class CarState(CarStateBase):
       # VCruiseHelper steps +/-5 km/h (see MK4_SCROLL_HOLD); a click while still held adds another cycle so
       # rapid clicks accumulate. The latched speed_up/speed_down (not the raw click) are what we emit. The
       # first press still initializes the set speed from vEgo without stepping. Wheel follow-distance buttons
-      # cycle the openpilot personality via gapAdjustCruise. Stalk UP / lateral button cancels.
+      # move the camera's dash; the personality follows it (interface.py). Stalk UP / lateral button cancels.
       raw_speed_up = int(cp.vl["WHEEL_ACC_BUTTONS"]["AP_INCREASE_SPEED_COMMAND"])
       raw_speed_down = int(cp.vl["WHEEL_ACC_BUTTONS"]["AP_DECREASE_SPEED_COMMAND"])
       if raw_speed_up and not self.prev_raw_speed_up:
@@ -227,22 +225,17 @@ class CarState(CarStateBase):
       speed_down = int(self.scroll_down_hold > 0)
       self.scroll_up_hold = max(0, self.scroll_up_hold - 1)
       self.scroll_down_hold = max(0, self.scroll_down_hold - 1)
-      dist_up = int(cp.vl["STEER_AND_AP_STALK"]["AP_INCREASE_DISTANCE_COMMAND"])
-      dist_down = int(cp.vl["STEER_AND_AP_STALK"]["AP_REDUCE_DISTANCE_COMMAND"])
       ret.buttonEvents = [
         *create_button_events(engage, self.prev_engage, {1: ButtonType.setCruise}),
         *create_button_events(lkas, self.prev_lkas, {1: ButtonType.lkas}),
         *create_button_events(speed_up, self.prev_speed_up, {1: ButtonType.accelCruise}),
         *create_button_events(speed_down, self.prev_speed_down, {1: ButtonType.decelCruise}),
-        *create_button_events(dist_up, self.prev_dist_up, {1: ButtonType.gapAdjustCruise}),
-        *create_button_events(dist_down, self.prev_dist_down, {1: ButtonType.gapAdjustCruise}),
         *create_button_events(int(cancel), self.prev_cancel, {1: ButtonType.cancel}),
       ]
       self.prev_enable_gesture = enable_gesture
       self.prev_engage = engage
       self.prev_lkas = lkas
       self.prev_speed_up, self.prev_speed_down = speed_up, speed_down
-      self.prev_dist_up, self.prev_dist_down = dist_up, dist_down
       self.prev_cancel = int(cancel)
       self.prev_drive_mode = drive_mode
 

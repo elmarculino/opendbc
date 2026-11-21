@@ -29,7 +29,7 @@ class CarInterface(CarInterfaceBase):
   CarState = CarState
   CarController = CarController
 
-  # MK3 personality sync: frames between synthetic gap-button pulses, so openpilot's personality
+  # Personality sync: frames between synthetic gap-button pulses, so openpilot's personality
   # feedback (hudControl.leadDistanceBars) can round-trip before the next pulse
   GAC_SYNC_INTERVAL = 25
 
@@ -42,8 +42,8 @@ class CarInterface(CarInterfaceBase):
     self.last_commanded_angle = 0.0    # MK4: last apply_angle, for the tracking-error fault gate
     self.current_personality = 0
     self.pcm_follow_distance = 0
-    self.press_gac_button = False    # MK3 only
-    self.last_gac_press_frame = -self.GAC_SYNC_INTERVAL    # MK3 only (self.frame comes from CarInterfaceBase)
+    self.press_gac_button = False
+    self.last_gac_press_frame = -self.GAC_SYNC_INTERVAL    # self.frame comes from CarInterfaceBase
 
   def apply(self, CC, now_nanos):
     self.lat_active = CC.latActive
@@ -101,26 +101,33 @@ class CarInterface(CarInterfaceBase):
 
     ret.steerFaultTemporary |= self.steer_fault_temporary_counter > 100
 
-    # Driving personality:
-    #  - MK4: cycled by the wheel follow-distance buttons -> gapAdjustCruise buttonEvents built in carstate
-    #    (the OEM CAR_DISTANCE_SELECTION dash goes stale once openpilot owns the car, so we no longer mirror it).
-    #  - MK3: mirror the OEM follow-distance dash. The stock ACC cycles 4 distances, openpilot has 3
-    #    personalities (distances 3 and 4 both map to the farthest). While they disagree, pulse gap-adjust
-    #    press/release pairs (openpilot cycles on release), rate-limited so leadDistanceBars can catch up.
-    if self.CP.carFingerprint != CAR.GWM_HAVAL_H6_MK4:
-      prev_gac_button = self.press_gac_button
-      if self.press_gac_button:
-        self.press_gac_button = False    # always complete the press with a release
-      else:
-        target_personality = min(int(self.pcm_follow_distance), 3)
-        out_of_sync = self.pcm_follow_distance > 0 and target_personality != self.current_personality
-        if out_of_sync and (self.frame - self.last_gac_press_frame) >= self.GAC_SYNC_INTERVAL:
-          self.press_gac_button = True
-          self.last_gac_press_frame = self.frame
-      ret.buttonEvents = create_button_events(int(self.press_gac_button), int(prev_gac_button), {1: ButtonType.gapAdjustCruise})
-      self.frame += 1
-
+    # Driving personality mirrors the OEM follow-distance dash (MK3 and MK4). The stock ACC has 4 distances, openpilot
+    # 3 personalities (distances 3 and 4 both map to the farthest). While they disagree, pulse gap-adjust
+    # press/release pairs (openpilot cycles on release), rate-limited so leadDistanceBars can catch up.
+    # MK4: the wheel distance buttons move the camera's dash up/down (routes 1d4/1e6, also while engaged), but
+    # openpilot only cycles one way on any press, so the cluster dashes and the personality drifted apart (1e8).
+    # The camera's own 0x2AB reaches the cluster untouched (MAC), so the dash is the source of truth.
+    gac_events = self.personality_sync_events()
+    if self.CP.carFingerprint == CAR.GWM_HAVAL_H6_MK4:
+      ret.buttonEvents = [*ret.buttonEvents, *gac_events]
+    else:
+      ret.buttonEvents = gac_events
     return ret
+
+  def personality_sync_events(self) -> list:
+    """One gap-adjust press/release pair at a time while the personality (leadDistanceBars) differs from the
+    OEM dash (1..4, 4 folded to 3); see update()."""
+    prev_gac_button = self.press_gac_button
+    if self.press_gac_button:
+      self.press_gac_button = False    # always complete the press with a release
+    else:
+      target_personality = min(int(self.pcm_follow_distance), 3)
+      out_of_sync = self.pcm_follow_distance > 0 and target_personality != self.current_personality
+      if out_of_sync and (self.frame - self.last_gac_press_frame) >= self.GAC_SYNC_INTERVAL:
+        self.press_gac_button = True
+        self.last_gac_press_frame = self.frame
+    self.frame += 1
+    return create_button_events(int(self.press_gac_button), int(prev_gac_button), {1: ButtonType.gapAdjustCruise})
 
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
