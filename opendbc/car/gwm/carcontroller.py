@@ -44,6 +44,11 @@ OVERRIDE_HOLD_FRAMES = 100
 MK4_HUD_STANDSTILL_SPEED = 0.5  # m/s (controlsd standstill gate is 0.3)
 # Cluster follow dashes from the driving personality (True) or the camera's own (False, ICC icon test).
 MK4_CLUSTER_PERSONALITY_DASHES = False
+# ICC on: re-TX the camera's 0x2AB untouched (test). Every 0x2AB ends in a freshness counter + 48-bit MAC
+# (b56..63) we cannot recompute; if the cluster verifies it, any edited frame is dropped. The icon/Vmax went
+# missing exactly in the sessions where none of our engaged frames matched the camera byte-for-byte (1c8/1c9
+# forced dashes; 1d4 36:36 sent 83 vs camera 82; 1e6 43:04/62:26 sent 20/40 vs camera 30/45).
+MK4_CLUSTER_PASSTHROUGH = True
 
 
 # MK4 regen-lead: BRAKE_GAS_STATE (regen enable) uses a light accel hysteresis so cruise chatter around
@@ -146,7 +151,8 @@ class CarController(CarControllerBase):
     # the camera through here showed 0x12/0x2a, so the ICC icon and Vmax went out while ACC was on.
     if not CC.enabled or not gas_pressed:
       self.acc_gas_override = False
-    elif CC.longActive or self.long_active_prev:
+    elif CC.longActive or self.long_active_prev or not self.enabled_prev:
+      # also when engaged with the pedal already down (longActive never rose: 1d4 36:36 hid the icon)
       self.acc_gas_override = True
     self.enabled_prev = CC.enabled
     self.long_active_prev = CC.longActive
@@ -184,6 +190,7 @@ class CarController(CarControllerBase):
       self.acc_cluster_set_kph = None
       self.acc_cluster_follow = None
     return dict(
+      passthrough=cruise_active and MK4_CLUSTER_PASSTHROUGH,
       set_speed_kph=set_kph,
       follow_dashes=follow,
       cruise_active=cruise_active,

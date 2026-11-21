@@ -324,7 +324,8 @@ def create_hud_command(packer, CAN: CanBus, hud_stock_values, steer_required, is
 
 def create_acc_cluster_mk4(CAN: CanBus, acc_stock_raw: bytes, set_speed_kph: float | None = None,
                           follow_dashes: int | None = None, cruise_active: bool = False,
-                          cancel_demote: bool = False, hide_exit_chime: bool = False, hide_icc: bool = False):
+                          cancel_demote: bool = False, hide_exit_chime: bool = False, hide_icc: bool = False,
+                          passthrough: bool = False):
   """Re-TX camera ACC (0x2AB) onto the main bus with openpilot's set speed for the OEM cluster.
 
   Under OP_CRUISE the stock camera freezes ACC_SPEED_SELECTION, so the Haval dash never tracks
@@ -340,12 +341,15 @@ def create_acc_cluster_mk4(CAN: CanBus, acc_stock_raw: bytes, set_speed_kph: flo
     bare 0x18. Only forcing CRUISE_STATE_2 left intermittent/missing icons when the camera
     freeze dropped 0x02 or distance went to 0 ("disabled").
     b21 always has bit5 (0x20) set on stock ACC-UI frames (0x21/0x61/…); low 3 bits = dashes.
-    b17 often has 0x80 while activated — set it when engaged so Vmax chrome stays lit.
+    b17 0x80 = lead detected (== b19 != 0 on every camera frame), not Vmax chrome; left alone.
 
   When set_speed_kph is None the speed field is left as in the camera frame (still re-TX for
   the relay slot). Follow-dashes None leaves the stock distance field untouched unless
   cruise_active requires a non-zero dash for ICC.
   """
+  if passthrough:
+    # the camera frame byte-for-byte (MAC in b56..63 stays valid), see MK4_CLUSTER_PASSTHROUGH
+    return 0x2AB, bytes(acc_stock_raw), CAN.main
   b = bytearray(acc_stock_raw)
   if set_speed_kph is not None:
     b[22] = int(round(float(np.clip(set_speed_kph, 0.0, 255.0)))) & 0xFF
@@ -360,8 +364,6 @@ def create_acc_cluster_mk4(CAN: CanBus, acc_stock_raw: bytes, set_speed_kph: flo
     if dist == 0:
       dist = 1
     b[21] = (b[21] & ~0x07) | dist | 0x20
-    # Vmax chrome assist (common on stock activated frames)
-    b[17] = b[17] | 0x80
   elif cancel_demote:
     # Quiet-cancel grace (~2 s after disengage): the camera steps 0x1a -> 0x0a (~0.1 s) -> 0x12
     # (~1.7 s) and the cluster dual-beeps — one beep per transition (routes 1f/20, identical with

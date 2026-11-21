@@ -46,30 +46,28 @@ class TestMk4AccCluster(unittest.TestCase):
       args = self.cc.acc_cluster_args(CC, v_ego=25.)
     return gwmcan.create_acc_cluster_mk4(self.CAN, _raw(), **args)[1]
 
-  def test_engaged_shows_icc_and_set_speed(self):
+  def test_engaged_passes_the_camera_frame_through(self):
+    # 0x2AB carries a MAC (b56..63): any edited byte would invalidate it, so ICC-on frames are the camera's own
     out = self._step(True, True, n=5)
-    self.assertEqual(out[18] & 0x3F, 0x1A)
-    self.assertEqual(out[22], 100)
-    self.assertNotEqual(out[21] & 0x07, 0)
+    self.assertEqual(out, _raw())
 
-  def test_engaged_keeps_the_camera_dashes(self):
-    # routes 1c8/1c9: the icon showed only with the camera's 2-3 dashes, never with our personality 1
-    out = self._step(True, True, n=5)  # personality 1 bar, camera 2 dashes
-    self.assertEqual(out[21], 0x22)
-
-  def test_gas_override_keeps_icc_and_set_speed(self):
+  def test_gas_override_passes_the_camera_frame_through(self):
     self._step(True, True, n=5)
     for _ in range(50):
-      out = self._step(True, False, gas=True)
-      self.assertEqual(out[18] & 0x3F, 0x1A)  # not the camera's 0x12 / 0x2a
-      self.assertEqual(out[22], 100)
-    out = self._step(True, True)  # pedal released, ACC resumes
-    self.assertEqual(out[18] & 0x3F, 0x1A)
+      self.assertEqual(self._step(True, False, gas=True), _raw())
+    self.assertTrue(self.cc.acc_gas_override)
+    self.assertEqual(self._step(True, True), _raw())  # pedal released, ACC resumes
 
-  def test_gas_override_tracks_set_speed_changes(self):
-    self._step(True, True, n=5)
-    out = self._step(True, False, gas=True, set_kph=110.)
-    self.assertEqual(out[22], 110)
+  def test_engage_with_gas_down_is_icc_on(self):
+    # 1d4 36:36: engaged at 83 km/h with the pedal down; longActive never rose so the icon was hidden
+    self._step(False, False, n=300)
+    out = self._step(True, False, gas=True, n=20)
+    self.assertTrue(self.cc.acc_gas_override)
+    self.assertEqual(out, _raw())
+
+  def test_edited_frame_never_sets_the_lead_flag(self):
+    out = gwmcan.create_acc_cluster_mk4(self.CAN, _raw(), set_speed_kph=90, cruise_active=True)[1]
+    self.assertEqual(out[17] & 0x80, 0)  # b17 0x80 = lead detected (camera: == b19 != 0)
 
   def test_gas_from_lat_only_does_not_show_icc(self):
     self._step(True, False, n=300)
