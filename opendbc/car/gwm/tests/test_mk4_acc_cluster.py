@@ -12,8 +12,8 @@ from opendbc.car.gwm.carcontroller import CarController
 from opendbc.car.gwm.gwmcan import CanBus
 
 
-def _cc(enabled, long_active, set_kph=100.):
-  hud = SimpleNamespace(setSpeed=set_kph / 3.6, speedVisible=True, leadDistanceBars=2)
+def _cc(enabled, long_active, set_kph=100., bars=2):
+  hud = SimpleNamespace(setSpeed=set_kph / 3.6, speedVisible=True, leadDistanceBars=bars)
   return SimpleNamespace(enabled=enabled, longActive=long_active, latActive=enabled, hudControl=hud)
 
 
@@ -39,9 +39,9 @@ class TestMk4AccCluster(unittest.TestCase):
     self.cc.acc_cluster_set_kph = None
     self.cc.acc_cluster_follow = None
 
-  def _step(self, enabled, long_active, gas=False, n=1, set_kph=100.):
+  def _step(self, enabled, long_active, gas=False, n=1, set_kph=100., bars=2):
     for _ in range(n):
-      CC = _cc(enabled, long_active, set_kph)
+      CC = _cc(enabled, long_active, set_kph, bars)
       self.cc.update_quiet_cancel(CC, gas)
       args = self.cc.acc_cluster_args(CC, v_ego=25.)
     return gwmcan.create_acc_cluster_mk4(self.CAN, _raw(), **args)[1]
@@ -52,10 +52,22 @@ class TestMk4AccCluster(unittest.TestCase):
     self.assertEqual(out[22], 100)
     self.assertNotEqual(out[21] & 0x07, 0)
 
-  def test_engaged_keeps_the_camera_dashes(self):
-    # routes 1c8/1c9: the icon showed only with the camera's 2-3 dashes, never with our personality 1
-    out = self._step(True, True, n=5)  # personality 1 bar, camera 2 dashes
-    self.assertEqual(out[21], 0x22)
+  def test_engaged_dashes_follow_the_personality(self):
+    # the camera's own dashes went 1-4 regardless of the personality; never send 4 (route 1d4, icon off at 83 km/h)
+    for bars in (1, 2, 3, 1):
+      out = self._step(True, True, n=5, bars=bars)
+      self.assertEqual(out[21], 0x20 | bars)
+
+  def test_engaged_defaults_to_3_dashes_before_bars(self):
+    out = self._step(True, True, bars=0)
+    self.assertEqual(out[21] & 0x07, 3)
+
+  def test_low_set_speed_shows_the_stock_minimum(self):
+    # engaging under ~30 km/h sets 20; the camera never reports under 30 and the cluster drew no ICC / Vmax
+    for set_kph, shown in ((20., 30), (29., 30), (30., 30), (34., 34)):
+      out = self._step(True, True, n=2, set_kph=set_kph)
+      self.assertEqual(out[22], shown)
+    self.assertEqual(self.cc.acc_cluster_set_kph, 34.)  # only the cluster copy is raised
 
   def test_gas_override_keeps_icc_and_set_speed(self):
     self._step(True, True, n=5)
