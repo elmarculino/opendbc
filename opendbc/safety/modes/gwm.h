@@ -13,6 +13,7 @@
 #define GWM_BLIND_SPOT          0x16FU
 #define GWM_HUD                 0x23DU
 #define GWM_GEAR_STALK          0xC7U // RX, MK4 op-cruise: gentle/further DOWN lever gesture (arms controls)
+#define GWM_WHEEL_ACC_BUTTONS   0x254U // TX to CAMERA, MK4: wheel-scroll UP click so the camera set speed follows openpilot
 
 // CAN bus
 #define GWM_MAIN_BUS 0U
@@ -234,6 +235,18 @@ static bool gwm_tx_hook(const CANPacket_t *msg) {
     }
   }
 
+  // MK4 set-speed sync: only the AP_INCREASE_SPEED_COMMAND click (byte2 0x10, all else 0), only to the camera and
+  // only while controls are allowed. Never a decrease, cancel or resume.
+  if ((msg->bus == GWM_CAMERA_BUS) && (msg->addr == GWM_WHEEL_ACC_BUTTONS)) {
+    bool up_click = (msg->data[2] == 0x10U);
+    for (int i = 0; i < 8; i++) {
+      if (i != 2) {
+        up_click = up_click && (msg->data[i] == 0U);
+      }
+    }
+    violation |= !up_click || !controls_allowed;
+  }
+
   if (violation) {
     tx = false;
   }
@@ -257,6 +270,7 @@ static safety_config gwm_init(uint16_t param) {
     {GWM_LONG_CONTROL, GWM_MAIN_BUS, 64, .check_relay = true}, // Longitudinal control message from camera
     {GWM_HUD, GWM_MAIN_BUS, 64, .check_relay = true}, // HUD and dashboard
     {GWM_CRUISE, GWM_MAIN_BUS, 64, .check_relay = true}, // ACC cluster set-speed / follow dashes
+    {GWM_WHEEL_ACC_BUTTONS, GWM_CAMERA_BUS, 8, .check_relay = false}, // MK4: set-speed UP click to camera
   };
 
   // Shared RX checks (hyundai-style macro so the two arrays can't diverge).

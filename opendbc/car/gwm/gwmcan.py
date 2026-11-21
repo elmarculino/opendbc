@@ -322,6 +322,13 @@ def create_hud_command(packer, CAN: CanBus, hud_stock_values, steer_required, is
   return packer.make_can_msg("LATERAL_STATE", CAN.main, values)
 
 
+def create_speed_up_click_mk4(CAN: CanBus):
+  """One wheel-scroll UP click (WHEEL_ACC_BUTTONS 0x254, AP_INCREASE_SPEED_COMMAND) to the camera. A real click is a
+  single 0x254 frame with byte2 0x10 among all-zero ones (route 1e8); no counter or checksum. Panda allows only
+  this payload, only to the camera and only while controls are allowed."""
+  return 0x254, bytes([0, 0, 0x10, 0, 0, 0, 0, 0]), CAN.camera
+
+
 def create_acc_cluster_mk4(CAN: CanBus, acc_stock_raw: bytes, set_speed_kph: float | None = None,
                           follow_dashes: int | None = None, cruise_active: bool = False,
                           cancel_demote: bool = False, hide_exit_chime: bool = False, hide_icc: bool = False,

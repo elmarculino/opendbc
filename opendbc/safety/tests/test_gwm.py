@@ -69,7 +69,8 @@ def checksum(msg):
 
 
 class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest, common.LongitudinalGasBrakeSafetyTest):
-  TX_MSGS = [[0x12B, 0], [0x143, 0], [0x147, 2], [0xA1, 2], [0x23D, 0], [0x2AB, 0]]  # steer, long, wheel touch, cancel, HUD, ACC cluster
+  # steer, long, wheel touch, cancel, HUD, ACC cluster, set-speed click
+  TX_MSGS = [[0x12B, 0], [0x143, 0], [0x147, 2], [0xA1, 2], [0x23D, 0], [0x2AB, 0], [0x254, 2]]
   RELAY_MALFUNCTION_ADDRS = {0: (0x12B, 0x143, 0x23D, 0x2AB), 2: (0x147,)}
   FWD_BLACKLISTED_ADDRS = {0: [0x147], 2: [0x12B, 0x143, 0x23D, 0x2AB]}
 
@@ -402,7 +403,8 @@ class TestGwmMk4TxSafety(common.SafetyTest):
   in gwm_init, but only this class proves the flags don't widen them; the cruise/steering
   semantics that DO change per flag are covered by the focused classes above."""
 
-  TX_MSGS = [[0x12B, 0], [0x143, 0], [0x147, 2], [0xA1, 2], [0x23D, 0], [0x2AB, 0]]  # steer, long, wheel touch, cancel, HUD, ACC cluster
+  # steer, long, wheel touch, cancel, HUD, ACC cluster, set-speed click
+  TX_MSGS = [[0x12B, 0], [0x143, 0], [0x147, 2], [0xA1, 2], [0x23D, 0], [0x2AB, 0], [0x254, 2]]
   RELAY_MALFUNCTION_ADDRS = {0: (0x12B, 0x143, 0x23D, 0x2AB), 2: (0x147,)}
   FWD_BLACKLISTED_ADDRS = {0: [0x147], 2: [0x12B, 0x143, 0x23D, 0x2AB]}
 
@@ -415,6 +417,24 @@ class TestGwmMk4TxSafety(common.SafetyTest):
   # attr-only test from CarSafetyTest (this class skips the rest of that suite, which needs
   # the per-platform message builders and flag-dependent cruise semantics)
   test_relay_malfunction = common.CarSafetyTest.test_relay_malfunction
+
+  def _click(self, byte2=0x10, other=0, bus=2):
+    dat = bytearray(8)
+    dat[2] = byte2
+    dat[5] = other
+    return common.make_msg(bus, 0x254, 8, dat=bytes(dat))
+
+  def test_speed_up_click_only_while_controls_allowed(self):
+    for allowed in (False, True):
+      self.safety.set_controls_allowed(allowed)
+      self.assertEqual(allowed, self._tx(self._click()))
+
+  def test_only_the_up_click_is_allowed(self):
+    self.safety.set_controls_allowed(True)
+    self.assertFalse(self._tx(self._click(byte2=0x01)))  # decrease
+    self.assertFalse(self._tx(self._click(byte2=0x11)))  # increase + decrease
+    self.assertFalse(self._tx(self._click(other=0x01)))  # anything else in the frame
+    self.assertFalse(self._tx(self._click(bus=0)))       # never to the car side
 
 
 if __name__ == "__main__":

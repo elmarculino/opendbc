@@ -49,6 +49,12 @@ MK4_CLUSTER_PERSONALITY_DASHES = False
 # missing exactly in the sessions where none of our engaged frames matched the camera byte-for-byte (1c8/1c9
 # forced dashes; 1d4 36:36 sent 83 vs camera 82; 1e6 43:04/62:26 sent 20/40 vs camera 30/45).
 MK4_CLUSTER_PASSTHROUGH = True
+# The cluster shows the camera's own set speed (0x2AB b22), which moves 5 km/h per wheel scroll click (route 1e8:
+# 50->55->60->65; off-grid values go to the next multiple of 5). When openpilot raises its set speed on its own
+# (gas-pedal release), inject UP clicks (0x254, one frame each, as a real click) to the camera until it catches up.
+MK4_SPEED_SYNC_STEP = 5            # kph per camera click
+MK4_SPEED_SYNC_GAP_FRAMES = 40     # 0.4 s between clicks: the camera's 10 Hz 0x2AB shows each step first
+MK4_SPEED_SYNC_MAX_CLICKS = 25     # per target set speed, in case the camera ignores the clicks
 
 
 # MK4 regen-lead: BRAKE_GAS_STATE (regen enable) uses a light accel hysteresis so cruise chatter around
@@ -100,6 +106,9 @@ class CarController(CarControllerBase):
     self.exit_chime_frames = 0       # MK4: frames left hiding the camera's ACC-exit chime flag (0x2AB b17 0x04)
     self.exit_flag_seen = False
     self.acc_gas_override = False    # MK4: gas pressed while ACC was engaged (cluster keeps showing ICC on)
+    self.speed_sync_wait = 0         # MK4: frames until the next set-speed UP click may be sent to the camera
+    self.speed_sync_clicks = 0       # MK4: UP clicks sent for speed_sync_target
+    self.speed_sync_target: int | None = None
 
   def update_quiet_cancel(self, CC, gas_pressed: bool, camera_deactivated: bool = False, camera_exit_flag: bool = False):
     # Quiet-cancel grace: on disengage, mask the camera's 0x1a->0x0a step on the 0x2AB re-TX (see
@@ -199,6 +208,30 @@ class CarController(CarControllerBase):
       # Also during the quiet-cancel grace, so a cancel is one cluster change (0x1a -> 0x12 without dashes).
       hide_icc=not cruise_active,
     )
+
+  def speed_sync_click(self, CC, acc_stock_raw: bytes, gas_pressed: bool) -> bool:
+    """True when an UP click should be sent to the camera this frame, so its set speed (the one the cluster shows)
+    catches up with openpilot's after a gas-pedal raise. Only while ACC is engaged and the camera is activated."""
+    if self.speed_sync_wait > 0:
+      self.speed_sync_wait -= 1
+      return False
+    hud = CC.hudControl
+    op_kph = int(round(float(hud.setSpeed) * CV.MS_TO_KPH)) if hud.speedVisible else 0
+    cam_kph = acc_stock_raw[22]
+    cam_active = ((acc_stock_raw[18] >> 3) & 0x7) == 3
+    if not (CC.longActive and cam_active and not gas_pressed and 0 < op_kph < 200):
+      self.speed_sync_target = None
+      self.speed_sync_clicks = 0
+      return False
+    if op_kph != self.speed_sync_target:
+      self.speed_sync_target = op_kph
+      self.speed_sync_clicks = 0
+    cam_next = (cam_kph // MK4_SPEED_SYNC_STEP + 1) * MK4_SPEED_SYNC_STEP
+    if cam_next > op_kph or self.speed_sync_clicks >= MK4_SPEED_SYNC_MAX_CLICKS:
+      return False
+    self.speed_sync_clicks += 1
+    self.speed_sync_wait = MK4_SPEED_SYNC_GAP_FRAMES
+    return True
 
   def long_braking(self, accel: float, long_active: bool, stopping: bool, v_ego: float) -> bool:
     """MK4 BRAKE_OR_GAS_REQ decision (True = brake mode) with the asymmetric anti-dither, see MK4_BRAKE_*."""
@@ -389,6 +422,9 @@ class CarController(CarControllerBase):
     if self.frame % 10 == 0:  # 10 Hz
       if self.is_mk4 and self.CP.openpilotLongitudinalControl and CS.acc_stock_raw is not None:
         can_sends.append(gwmcan.create_acc_cluster_mk4(self.CAN, CS.acc_stock_raw, **self.acc_cluster_args(CC, CS.out.vEgo)))
+    if self.is_mk4 and self.CP.openpilotLongitudinalControl and CS.acc_stock_raw is not None:
+      if self.speed_sync_click(CC, CS.acc_stock_raw, CS.out.gasPressed):
+        can_sends.append(gwmcan.create_speed_up_click_mk4(self.CAN))
 
     new_actuators = actuators.as_builder()
     if self.CP.steerControlType == SteerControlType.angle:
